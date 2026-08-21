@@ -17,6 +17,12 @@ value-quant-app/
 └── tests/                       35 test offline, nessuna rete richiesta
 ```
 
+## Documentazione
+
+**[Metodologia completa](docs/METODOLOGIA.md)** — cosa calcola ogni modulo, con quali
+formule, e come si leggono i numeri che produce. Disponibile anche in
+[PDF](docs/Metodologia-value-quant-app.pdf).
+
 ## Avvio rapido
 
 ```bash
