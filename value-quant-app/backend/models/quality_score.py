@@ -124,6 +124,8 @@ BALANCE_ALIASES: Dict[str, Sequence[str]] = {
     "current_assets": ("Current Assets", "Total Current Assets"),
     "current_liabilities": ("Current Liabilities", "Total Current Liabilities"),
     "invested_capital": ("Invested Capital",),
+    "shares_outstanding": ("Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"),
+    "tangible_book_value": ("Tangible Book Value", "Net Tangible Assets"),
 }
 
 CASHFLOW_ALIASES: Dict[str, Sequence[str]] = {

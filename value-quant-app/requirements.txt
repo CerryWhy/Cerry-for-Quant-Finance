@@ -1,3 +1,5 @@
-# Dipendenze del modulo di analisi fondamentale (backend/models/quality_score.py)
-yfinance>=0.2.40
-pandas>=2.0
+# Dipendenze di value-quant-app
+yfinance>=0.2.40      # bilanci e prezzi storici
+pandas>=2.0           # manipolazione dei prospetti e delle serie
+numpy>=1.24           # calcoli vettoriali di backtest e griglie
+matplotlib>=3.7       # grafici e tear sheet (opzionale: senza, i moduli calcolano lo stesso)
