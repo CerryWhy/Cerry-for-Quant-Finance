@@ -148,6 +148,10 @@ python backend/models/backtest.py AAPL MSFT KO PG JNJ V MA HD
 | `plot_sensitivity_surface` | superficie 3D (o curve di livello) di sensitivita' |
 | `create_tearsheet` | tutto in una pagina |
 
+**Lingua delle etichette**: i grafici sono in **inglese** di default (convenzione dei
+documenti finanziari). Per l'italiano: `--lang it` da riga di comando, oppure
+`visualize.set_language("it")` da codice. I report testuali restano in italiano.
+
 Tre scelte di progetto, non estetiche:
 
 - **niente doppio asse y**: due scale sullo stesso riquadro inventano correlazioni che

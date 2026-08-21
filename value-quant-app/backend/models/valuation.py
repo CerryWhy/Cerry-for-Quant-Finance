@@ -713,10 +713,12 @@ def sensitivity_grid(
             )
         values.append(row_values)
         upside.append(row_upside)
+    # Le etichette restano in inglese: sono chiavi stabili consumate da visualize.py,
+    # che le traduce nella lingua scelta al momento di disegnare.
     return {
         "x_label": "WACC", "x_values": [float(v) for v in wacc_values],
-        "y_label": "Crescita terminale", "y_values": [float(v) for v in growth_values],
-        "z_label": "Valore per azione", "values": values,
+        "y_label": "Terminal growth", "y_values": [float(v) for v in growth_values],
+        "z_label": "Value per share", "values": values,
         "upside_pct": upside,
     }
 

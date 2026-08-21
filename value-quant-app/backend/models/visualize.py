@@ -25,6 +25,7 @@ Uso::
 
     python visualize.py               # demo con dati sintetici -> cartella output/
     python visualize.py --show        # mostra i grafici invece di salvarli
+    python visualize.py --lang it     # etichette in italiano (default: inglese)
 """
 
 from __future__ import annotations
@@ -62,8 +63,11 @@ except ImportError:  # pragma: no cover
 __all__ = [
     "PALETTE",
     "apply_style",
+    "STRINGS",
     "create_tearsheet",
     "demo",
+    "get_language",
+    "set_language",
     "plot_equity_curve",
     "plot_football_field",
     "plot_metrics_history",
@@ -73,6 +77,146 @@ __all__ = [
     "plot_universe_heatmap",
     "save_figure",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Lingua delle etichette
+# ---------------------------------------------------------------------------
+
+#: Testi dei grafici: (italiano, inglese). La lingua di default e' l'inglese, che e'
+#: la convenzione nei documenti finanziari; con ``set_language("it")`` si passa
+#: all'italiano senza toccare il codice dei grafici.
+STRINGS: Dict[str, Tuple[str, str]] = {
+    "equity_title": ("Strategia quality + value vs benchmark",
+                     "Quality + value strategy vs benchmark"),
+    "strategy": ("Strategia", "Strategy"),
+    "benchmark": ("Benchmark", "Benchmark"),
+    "capital_log": ("Capitale (scala log)", "Capital (log scale)"),
+    "capital": ("Capitale", "Capital"),
+    "drawdown": ("Drawdown %", "Drawdown %"),
+    "no_backtest": ("Backtest non disponibile", "Backtest not available"),
+    "fair_value_rule": ("fair value", "fair value"),
+    "price_rule": ("prezzo", "price"),
+    "value_per_share_axis": ("Valore per azione", "Value per share"),
+    "legend_included": ("metodo incluso nel fair value", "included in fair value"),
+    "legend_reference": ("riferimento (escluso)", "reference (excluded)"),
+    "legend_market_price": ("prezzo di mercato", "market price"),
+    "margin_of_safety": ("margine di sicurezza", "margin of safety"),
+    "valuation_methods": ("metodi di valutazione", "valuation methods"),
+    "no_valuation": ("Valutazione non disponibile", "Valuation not available"),
+    "axis_roic": ("ROIC", "ROIC"),
+    "axis_margins": ("Margini", "Margins"),
+    "axis_owner_earnings": ("Owner Earnings", "Owner Earnings"),
+    "axis_roic_stability": ("Stabilita' ROIC", "ROIC stability"),
+    "axis_revenue_growth": ("Crescita ricavi", "Revenue growth"),
+    "axis_debt": ("Debito", "Debt"),
+    "axis_interest_cover": ("Copertura interessi", "Interest coverage"),
+    "axis_liquidity": ("Liquidita'", "Liquidity"),
+    "quality_profile": ("Profilo di qualita'", "Quality profile"),
+    "quality_profile_compare": ("Profilo di qualita' a confronto", "Quality profile comparison"),
+    "no_quality": ("Punteggi di qualita' non disponibili", "Quality scores not available"),
+    "metric_operating_margin": ("Margine operativo", "Operating margin"),
+    "metric_net_margin": ("Margine netto", "Net margin"),
+    "metric_debt_equity": ("Debt / Equity", "Debt / Equity"),
+    "metric_interest_coverage": ("Interest Coverage", "Interest coverage"),
+    "col_quality_score": ("Quality Score", "Quality Score"),
+    "col_profitability": ("Profittabilita'", "Profitability"),
+    "col_consistency": ("Consistenza", "Consistency"),
+    "col_balance_sheet": ("Solidita'", "Balance sheet"),
+    "score_scale": ("punteggio 0-100", "score 0-100"),
+    "universe_title": ("Qualita' dell'universo analizzato", "Quality across the universe"),
+    "no_universe": ("Nessun punteggio disponibile per l'universo",
+                    "No scores available for this universe"),
+    "scatter_x": ("Quality Score (0-100)", "Quality Score (0-100)"),
+    "scatter_y": ("Margine di sicurezza %", "Margin of safety %"),
+    "scatter_title": ("Dove comprare: qualita' contro sconto",
+                      "Where to buy: quality vs discount"),
+    "quadrant_good": ("qualita' alta, a sconto", "high quality, at a discount"),
+    "quadrant_bad": ("qualita' bassa, cara", "low quality, expensive"),
+    "scatter_missing": ("Servono sia il punteggio di qualita' sia il margine di sicurezza",
+                        "Both a quality score and a margin of safety are required"),
+    "sensitivity_title": ("Sensitivita': {z} al variare di {x} e {y}",
+                          "Sensitivity: {z} across {x} and {y}"),
+    "no_grid": ("Griglia di sensitivita' non disponibile", "Sensitivity grid not available"),
+    "tile_price": ("Prezzo", "Price"),
+    "tile_fair_value": ("Fair value", "Fair value"),
+    "tile_margin": ("Margine di sicurezza", "Margin of safety"),
+    "tile_implied_growth": ("Crescita implicita", "Implied growth"),
+    "tile_implied_note": ("scontata dal prezzo", "priced in by the market"),
+    "tile_strategy_cagr": ("CAGR strategia", "Strategy CAGR"),
+    "no_valuation_panel": ("Valutazione non calcolata", "Valuation not computed"),
+    "no_quality_panel": ("Qualita' non calcolata", "Quality not computed"),
+}
+
+#: Etichette che arrivano dai dizionari di ``valuation``/``backtest``: li' restano in
+#: inglese (sono chiavi stabili), qui vengono tradotte solo per la visualizzazione.
+DATA_LABELS: Dict[str, Tuple[str, str]] = {
+    "WACC": ("WACC", "WACC"),
+    "Terminal growth": ("Crescita terminale", "Terminal growth"),
+    "Value per share": ("Valore per azione", "Value per share"),
+    "top_n": ("Numero di titoli", "Number of holdings"),
+    "quality_weight": ("Peso della qualita'", "Quality weight"),
+    "value_weight": ("Peso del valore", "Value weight"),
+    "transaction_cost_bps": ("Costi (bp)", "Costs (bp)"),
+    "reporting_lag_days": ("Lag di reporting (giorni)", "Reporting lag (days)"),
+    "min_quality_score": ("Qualita' minima", "Minimum quality"),
+    "sharpe": ("Sharpe ratio", "Sharpe ratio"),
+    "sortino": ("Sortino ratio", "Sortino ratio"),
+    "cagr": ("CAGR", "CAGR"),
+    "max_drawdown": ("Max drawdown", "Max drawdown"),
+    "calmar": ("Calmar ratio", "Calmar ratio"),
+    "alpha": ("Alpha", "Alpha"),
+    "volatility": ("Volatilita'", "Volatility"),
+    # Giudizi e nomi dei metodi: i moduli di calcolo li producono in italiano (i loro
+    # report testuali sono in italiano), qui vengono tradotti solo per i grafici.
+    "Eccellente": ("Eccellente", "Excellent"),
+    "Buona": ("Buona", "Good"),
+    "Discreta": ("Discreta", "Fair"),
+    "Debole": ("Debole", "Weak"),
+    "Scarsa": ("Scarsa", "Poor"),
+    "Non valutabile": ("Non valutabile", "Not assessable"),
+    "Sconto significativo": ("Sconto significativo", "Significant discount"),
+    "Moderatamente sottovalutata": ("Moderatamente sottovalutata", "Moderately undervalued"),
+    "In linea con il valore stimato": ("In linea con il valore stimato", "In line with fair value"),
+    "Moderatamente sopravvalutata": ("Moderatamente sopravvalutata", "Moderately overvalued"),
+    "Sopravvalutata": ("Sopravvalutata", "Overvalued"),
+    "DCF Owner Earnings": ("DCF Owner Earnings", "Owner Earnings DCF"),
+    "EPV (crescita zero)": ("EPV (crescita zero)", "EPV (no growth)"),
+    "Graham Number": ("Graham Number", "Graham Number"),
+    "NCAV (net-net)": ("NCAV (net-net)", "NCAV (net-net)"),
+    "Multipli storici del titolo": ("Multipli storici del titolo", "Own historical multiples"),
+    "Multipli storici": ("Multipli storici", "Historical multiples"),
+}
+
+_LANGUAGE = "en"
+
+
+def set_language(language: str) -> None:
+    """Imposta la lingua delle etichette: ``"it"`` o ``"en"`` (default)."""
+    global _LANGUAGE
+    _LANGUAGE = "it" if str(language).lower().startswith("it") else "en"
+
+
+def get_language() -> str:
+    """Lingua attualmente in uso per le etichette."""
+    return _LANGUAGE
+
+
+def _t(key: str, **fields: Any) -> str:
+    """Testo tradotto nella lingua corrente, con eventuale interpolazione."""
+    italian, english = STRINGS.get(key, (key, key))
+    text = italian if _LANGUAGE == "it" else english
+    return text.format(**fields) if fields else text
+
+
+def _label(raw: Any) -> str:
+    """Traduce un'etichetta proveniente dai dati, lasciandola invariata se sconosciuta."""
+    if raw is None:
+        return ""
+    pair = DATA_LABELS.get(str(raw))
+    if not pair:
+        return str(raw)
+    return pair[0] if _LANGUAGE == "it" else pair[1]
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +358,7 @@ def plot_equity_curve(
     *,
     axes: Optional[Sequence[Any]] = None,
     log_scale: bool = True,
-    title: str = "Strategia quality + value vs benchmark",
+    title: Optional[str] = None,
     save: Optional[str] = None,
 ) -> Any:
     """Curva di capitale con il drawdown in un pannello separato sotto.
@@ -225,6 +369,7 @@ def plot_equity_curve(
     """
     _require_matplotlib()
     apply_style()
+    title = title or _t("equity_title")
 
     if axes is None:
         figure, (ax_equity, ax_drawdown) = plt.subplots(
@@ -236,7 +381,7 @@ def plot_equity_curve(
 
     equity = backtest.get("equity_curve")
     if equity is None or len(equity) == 0:
-        _annotate_missing(ax_equity, backtest.get("error") or "Backtest non disponibile")
+        _annotate_missing(ax_equity, backtest.get("error") or _t("no_backtest"))
         _annotate_missing(ax_drawdown, "")
         if save:
             save_figure(figure, save)
@@ -245,10 +390,10 @@ def plot_equity_curve(
     benchmark = backtest.get("benchmark_curve")
 
     ax_equity.plot(equity.index, equity.values, color=PALETTE["series"][0],
-                   linewidth=2.0, label="Strategia", zorder=3)
+                   linewidth=2.0, label=_t("strategy"), zorder=3)
     if benchmark is not None and len(benchmark):
         ax_equity.plot(benchmark.index, benchmark.values, color=PALETTE["series"][1],
-                       linewidth=1.6, label="Benchmark", zorder=2)
+                       linewidth=1.6, label=_t("benchmark"), zorder=2)
 
     # Etichette dirette solo sull'ultimo punto: un numero su ogni punto sarebbe illeggibile.
     ax_equity.annotate(
@@ -265,9 +410,9 @@ def plot_equity_curve(
 
     if log_scale:
         ax_equity.set_yscale("log")
-        ax_equity.set_ylabel("Capitale (scala log)")
+        ax_equity.set_ylabel(_t("capital_log"))
     else:
-        ax_equity.set_ylabel("Capitale")
+        ax_equity.set_ylabel(_t("capital"))
     ax_equity.set_title(title, loc="left", pad=12)
     ax_equity.legend(loc="upper left", ncols=2)
     # Le date le porta il pannello del drawdown, subito sotto e con la stessa scala x.
@@ -307,7 +452,7 @@ def plot_equity_curve(
             color=PALETTE["ink_secondary"], fontsize=8.5,
         )
         ax_drawdown.set_ylim(worst * 1.15, 0)
-    ax_drawdown.set_ylabel("Drawdown %")
+    ax_drawdown.set_ylabel(_t("drawdown"))
     ax_drawdown.set_xlim(ax_equity.get_xlim())
     _clean_axes(ax_drawdown)
 
@@ -360,10 +505,11 @@ def plot_football_field(
             bull = (scenarios.get("bull") or {}).get("value_per_share")
             if bear is not None and bull is not None:
                 low, high = min(bear, bull), max(bear, bull)
-        rows.append((method.get("label", key), value, low, high, bool(method.get("aggregated"))))
+        rows.append((_label(method.get("label", key)), value, low, high,
+                     bool(method.get("aggregated"))))
 
     if not rows:
-        _annotate_missing(ax, valuation.get("error") or "Valutazione non disponibile")
+        _annotate_missing(ax, valuation.get("error") or _t("no_valuation"))
         if save:
             save_figure(figure, save)
         return figure
@@ -389,17 +535,18 @@ def plot_football_field(
 
     if fair.get("point") is not None:
         ax.axvline(fair["point"], color=blue, linewidth=1.6, zorder=5)
-        ax.annotate("fair value", xy=(fair["point"], len(rows) - 0.35), xytext=(5, 0),
+        ax.annotate(_t("fair_value_rule"), xy=(fair["point"], len(rows) - 0.35), xytext=(5, 0),
                     textcoords="offset points", color=blue, fontsize=8.5, fontweight="600")
     if price:
         ax.axvline(price, color=PALETTE["ink"], linewidth=1.8, zorder=6)
-        ax.annotate(f"prezzo {price:,.1f}", xy=(price, -0.7), xytext=(5, 0),
+        ax.annotate(f'{_t("price_rule")} {price:,.1f}', xy=(price, -0.7), xytext=(5, 0),
                     textcoords="offset points", color=PALETTE["ink"], fontsize=9,
                     fontweight="600")
 
     ax.set_yticks(positions)
     ax.set_yticklabels([row[0] for row in rows], color=PALETTE["ink_secondary"], fontsize=9)
-    ax.set_xlabel(f"Valore per azione ({valuation.get('currency') or ''})")
+    currency_label = valuation.get("currency") or ""
+    ax.set_xlabel(f'{_t("value_per_share_axis")} ({currency_label})')
     ax.set_ylim(-1.1, len(rows) - 0.1)
 
     margin = valuation.get("margin_of_safety")
@@ -411,20 +558,21 @@ def plot_football_field(
         # Il colore di stato non viaggia mai da solo: accanto c'e' sempre il testo.
         ax.set_title(
             f"{valuation.get('company_name') or valuation.get('ticker')}"
-            f"  ·  margine di sicurezza {margin * 100:+.1f}%  ·  {verdict}",
+            f"  ·  {_t('margin_of_safety')} {margin * 100:+.1f}%  ·  {_label(verdict)}",
             loc="left", pad=12, color=status,
         )
     else:
         ax.set_title(
-            f"{valuation.get('company_name') or valuation.get('ticker')}  ·  metodi di valutazione",
+            f"{valuation.get('company_name') or valuation.get('ticker')}"
+            f"  ·  {_t('valuation_methods')}",
             loc="left", pad=12,
         )
 
     _clean_axes(ax, grid_axis="x")
     handles = [
-        Patch(facecolor=blue, alpha=0.55, label="metodo incluso nel fair value"),
-        Patch(facecolor=PALETTE["muted"], alpha=0.55, label="riferimento (escluso)"),
-        Line2D([0], [0], color=PALETTE["ink"], linewidth=1.8, label="prezzo di mercato"),
+        Patch(facecolor=blue, alpha=0.55, label=_t("legend_included")),
+        Patch(facecolor=PALETTE["muted"], alpha=0.55, label=_t("legend_reference")),
+        Line2D([0], [0], color=PALETTE["ink"], linewidth=1.8, label=_t("legend_market_price")),
     ]
     # Sotto il riquadro: dentro finirebbe sopra la barra del DCF, che occupa tutta la larghezza.
     ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncols=3)
@@ -464,20 +612,20 @@ def plot_quality_radar(
         figure = ax.figure
 
     if not results:
-        _annotate_missing(ax, "Punteggi di qualita' non disponibili")
+        _annotate_missing(ax, _t("no_quality"))
         if save:
             save_figure(figure, save)
         return figure
 
     axes_labels = [
-        ("ROIC", ("profitability", "roic")),
-        ("Margini", ("profitability", "operating_margin")),
-        ("Owner Earnings", ("profitability", "owner_earnings_margin")),
-        ("Stabilita' ROIC", ("consistency", "roic_stability")),
-        ("Crescita ricavi", ("consistency", "revenue_growth_years")),
-        ("Debito", ("balance_sheet", "debt_to_equity")),
-        ("Copertura interessi", ("balance_sheet", "interest_coverage")),
-        ("Liquidita'", ("balance_sheet", "current_ratio")),
+        (_t("axis_roic"), ("profitability", "roic")),
+        (_t("axis_margins"), ("profitability", "operating_margin")),
+        (_t("axis_owner_earnings"), ("profitability", "owner_earnings_margin")),
+        (_t("axis_roic_stability"), ("consistency", "roic_stability")),
+        (_t("axis_revenue_growth"), ("consistency", "revenue_growth_years")),
+        (_t("axis_debt"), ("balance_sheet", "debt_to_equity")),
+        (_t("axis_interest_cover"), ("balance_sheet", "interest_coverage")),
+        (_t("axis_liquidity"), ("balance_sheet", "current_ratio")),
     ]
     angles = [n / len(axes_labels) * 2 * math.pi for n in range(len(axes_labels))]
     angles += angles[:1]
@@ -508,8 +656,8 @@ def plot_quality_radar(
     ax.spines["polar"].set_color(PALETTE["axis"])
     ax.grid(color=PALETTE["grid"], linewidth=0.6)
     title = (
-        f"Profilo di qualita' · {results[0].get('ticker')}"
-        if len(results) == 1 else "Profilo di qualita' a confronto"
+        f"{_t('quality_profile')} · {results[0].get('ticker')}"
+        if len(results) == 1 else _t("quality_profile_compare")
     )
     ax.set_title(title, pad=22, color=PALETTE["ink"])
     if len(results) > 1:
@@ -529,12 +677,12 @@ def plot_metrics_history(
     quality: Mapping[str, Any],
     *,
     metrics: Sequence[Tuple[str, str, str]] = (
-        ("roic", "ROIC", "%"),
-        ("operating_margin", "Margine operativo", "%"),
-        ("net_margin", "Margine netto", "%"),
-        ("owner_earnings", "Owner Earnings", "abs"),
-        ("debt_to_equity", "Debt / Equity", "x"),
-        ("interest_coverage", "Interest Coverage", "x"),
+        ("roic", "axis_roic", "%"),
+        ("operating_margin", "metric_operating_margin", "%"),
+        ("net_margin", "metric_net_margin", "%"),
+        ("owner_earnings", "axis_owner_earnings", "abs"),
+        ("debt_to_equity", "metric_debt_equity", "x"),
+        ("interest_coverage", "metric_interest_coverage", "x"),
     ),
     axes: Optional[Sequence[Any]] = None,
     save: Optional[str] = None,
@@ -560,9 +708,11 @@ def plot_metrics_history(
         figure = axes_list[0].figure
 
     blue = PALETTE["series"][0]
-    for index, (key, label, unit) in enumerate(metrics):
+    for index, (key, label_key, unit) in enumerate(metrics):
         if index >= len(axes_list):
             break
+        # Le etichette possono essere chiavi di traduzione o testo gia' pronto.
+        label = _t(label_key) if label_key in STRINGS else label_key
         ax = axes_list[index]
         series = data.get(key) or {}
         points = [(year, series.get(year)) for year in years if series.get(year) is not None]
@@ -631,17 +781,20 @@ def plot_universe_heatmap(
 
     usable = [row for row in rows if row.get("quality_score") is not None]
     if not usable or np is None:
-        _annotate_missing(ax, "Nessun punteggio disponibile per l'universo")
+        _annotate_missing(ax, _t("no_universe"))
         if save:
             save_figure(figure, save)
         return figure
 
     usable = sorted(usable, key=lambda row: row["quality_score"], reverse=True)
     columns = [
-        ("Quality Score", lambda r: r.get("quality_score")),
-        ("Profittabilita'", lambda r: (r.get("category_scores") or {}).get("profitability", {}).get("score")),
-        ("Consistenza", lambda r: (r.get("category_scores") or {}).get("consistency", {}).get("score")),
-        ("Solidita'", lambda r: (r.get("category_scores") or {}).get("balance_sheet", {}).get("score")),
+        (_t("col_quality_score"), lambda r: r.get("quality_score")),
+        (_t("col_profitability"),
+         lambda r: (r.get("category_scores") or {}).get("profitability", {}).get("score")),
+        (_t("col_consistency"),
+         lambda r: (r.get("category_scores") or {}).get("consistency", {}).get("score")),
+        (_t("col_balance_sheet"),
+         lambda r: (r.get("category_scores") or {}).get("balance_sheet", {}).get("score")),
     ]
     matrix = np.array([
         [(getter(row) if getter(row) is not None else np.nan) for _, getter in columns]
@@ -680,11 +833,11 @@ def plot_universe_heatmap(
         spine.set_visible(False)
 
     colorbar = figure.colorbar(image, ax=ax, fraction=0.025, pad=0.02)
-    colorbar.set_label("punteggio 0-100", color=PALETTE["ink_secondary"], fontsize=8.5)
+    colorbar.set_label(_t("score_scale"), color=PALETTE["ink_secondary"], fontsize=8.5)
     colorbar.ax.tick_params(colors=PALETTE["muted"], labelsize=7.5)
     colorbar.outline.set_edgecolor(PALETTE["axis"])
 
-    ax.set_title("Qualita' dell'universo analizzato", loc="left", pad=12)
+    ax.set_title(_t("universe_title"), loc="left", pad=12)
     figure.tight_layout()
     if save:
         save_figure(figure, save)
@@ -723,7 +876,7 @@ def plot_quality_value_scatter(
         if row.get("quality_score") is not None and row.get("margin_of_safety") is not None
     ]
     if not points:
-        _annotate_missing(ax, "Servono sia il punteggio di qualita' sia il margine di sicurezza")
+        _annotate_missing(ax, _t("scatter_missing"))
         if save:
             save_figure(figure, save)
         return figure
@@ -744,14 +897,14 @@ def plot_quality_value_scatter(
                     textcoords="offset points", ha="center", fontsize=8.5,
                     color=PALETTE["ink"])
 
-    ax.text(0.99, 0.98, "qualita' alta, a sconto", transform=ax.transAxes, ha="right",
+    ax.text(0.99, 0.98, _t("quadrant_good"), transform=ax.transAxes, ha="right",
             va="top", fontsize=8.5, color=PALETTE["status"]["good"])
-    ax.text(0.01, 0.02, "qualita' bassa, cara", transform=ax.transAxes, ha="left",
+    ax.text(0.01, 0.02, _t("quadrant_bad"), transform=ax.transAxes, ha="left",
             va="bottom", fontsize=8.5, color=PALETTE["muted"])
 
-    ax.set_xlabel("Quality Score (0-100)")
-    ax.set_ylabel("Margine di sicurezza %")
-    ax.set_title("Dove comprare: qualita' contro sconto", loc="left", pad=12)
+    ax.set_xlabel(_t("scatter_x"))
+    ax.set_ylabel(_t("scatter_y"))
+    ax.set_title(_t("scatter_title"), loc="left", pad=12)
     _clean_axes(ax, grid_axis="both")
     figure.tight_layout()
     if save:
@@ -811,7 +964,7 @@ def plot_sensitivity_surface(
         figure = ax.figure
 
     if not usable:
-        _annotate_missing(ax, "Griglia di sensitivita' non disponibile")
+        _annotate_missing(ax, _t("no_grid"))
         if save:
             save_figure(figure, save)
         return figure
@@ -828,8 +981,10 @@ def plot_sensitivity_surface(
     scale = 100.0 if percent_axes else 1.0
     label_suffix = "%" if percent_axes else ""
 
-    x_label = f"{grid.get('x_label', 'x')} (%)" if percent_axes else str(grid.get("x_label", "x"))
-    y_label = f"{grid.get('y_label', 'y')} (%)" if percent_axes else str(grid.get("y_label", "y"))
+    x_name, y_name = _label(grid.get("x_label")), _label(grid.get("y_label"))
+    z_name = _label(grid.get("z_label"))
+    x_label = f"{x_name} (%)" if percent_axes else x_name
+    y_label = f"{y_name} (%)" if percent_axes else y_name
 
     if kind == "surface":
         surface = ax.plot_surface(
@@ -838,7 +993,7 @@ def plot_sensitivity_surface(
         )
         ax.set_xlabel(x_label, labelpad=12)
         ax.set_ylabel(y_label, labelpad=12)
-        ax.set_zlabel(grid.get("z_label", "z"), labelpad=12)
+        ax.set_zlabel(z_name, labelpad=12)
         # Tacche solo sui valori realmente calcolati: le posizioni intermedie
         # suggerirebbero una risoluzione che la griglia non ha.
         ax.set_xticks(x_values * scale)
@@ -866,14 +1021,13 @@ def plot_sensitivity_surface(
         _clean_axes(ax, grid_axis="both")
         ax.grid(False)
         colorbar = figure.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
-        colorbar.set_label(grid.get("z_label", ""), color=PALETTE["ink_secondary"], fontsize=8.5)
+        colorbar.set_label(z_name, color=PALETTE["ink_secondary"], fontsize=8.5)
 
     colorbar.ax.tick_params(colors=PALETTE["muted"], labelsize=7.5)
     colorbar.outline.set_edgecolor(PALETTE["axis"])
 
     ax.set_title(
-        title or f"Sensitivita': {grid.get('z_label', '')}"
-                 f" al variare di {grid.get('x_label')} e {grid.get('y_label')}",
+        title or _t("sensitivity_title", z=z_name, x=x_name, y=y_name),
         loc="left", pad=16,
     )
     if save:
@@ -918,24 +1072,28 @@ def create_tearsheet(
 
     tiles: List[Tuple[str, str, str]] = []
     if quality and quality.get("quality_score") is not None:
-        tiles.append(("Quality Score", f"{quality['quality_score']:.0f}", quality.get("rating", "")))
+        tiles.append((_t("col_quality_score"), f"{quality['quality_score']:.0f}",
+                      _label(quality.get("rating", ""))))
     if valuation:
         if valuation.get("price") is not None:
-            tiles.append(("Prezzo", f"{valuation['price']:,.2f}", valuation.get("currency") or ""))
+            tiles.append((_t("tile_price"), f"{valuation['price']:,.2f}",
+                          valuation.get("currency") or ""))
         fair_value = (valuation.get("fair_value") or {}).get("point")
         if fair_value is not None:
-            tiles.append(("Fair value", f"{fair_value:,.2f}", valuation.get("currency") or ""))
+            tiles.append((_t("tile_fair_value"), f"{fair_value:,.2f}",
+                          valuation.get("currency") or ""))
         if valuation.get("margin_of_safety") is not None:
             tiles.append((
-                "Margine di sicurezza",
+                _t("tile_margin"),
                 f"{valuation['margin_of_safety'] * 100:+.1f}%",
-                valuation.get("verdict", ""),
+                _label(valuation.get("verdict", "")),
             ))
         implied = (valuation.get("reverse_dcf") or {}).get("implied_growth")
         if implied is not None:
-            tiles.append(("Crescita implicita", f"{implied * 100:.1f}%", "scontata dal prezzo"))
+            tiles.append((_t("tile_implied_growth"), f"{implied * 100:.1f}%",
+                          _t("tile_implied_note")))
     if backtest and (backtest.get("metrics") or {}).get("cagr") is not None:
-        tiles.append(("CAGR strategia", f"{backtest['metrics']['cagr'] * 100:.1f}%",
+        tiles.append((_t("tile_strategy_cagr"), f"{backtest['metrics']['cagr'] * 100:.1f}%",
                       f"Sharpe {backtest['metrics'].get('sharpe') or 0:.2f}"))
 
     for index, (label, value, note) in enumerate(tiles[:6]):
@@ -948,19 +1106,20 @@ def create_tearsheet(
     if valuation:
         plot_football_field(valuation, ax=figure.add_subplot(grid[1, :2]))
     else:
-        _annotate_missing(figure.add_subplot(grid[1, :2]), "Valutazione non calcolata")
+        _annotate_missing(figure.add_subplot(grid[1, :2]), _t("no_valuation_panel"))
     if quality:
         plot_quality_radar(quality, ax=figure.add_subplot(grid[1, 2], projection="polar"))
     else:
-        _annotate_missing(figure.add_subplot(grid[1, 2]), "Qualita' non calcolata")
+        _annotate_missing(figure.add_subplot(grid[1, 2]), _t("no_quality_panel"))
 
     # Riga 3: storico delle metriche
     if quality:
         history_axes = [figure.add_subplot(grid[2, column]) for column in range(3)]
         plot_metrics_history(
             quality,
-            metrics=(("roic", "ROIC", "%"), ("operating_margin", "Margine operativo", "%"),
-                     ("owner_earnings", "Owner Earnings", "abs")),
+            metrics=(("roic", "axis_roic", "%"),
+                     ("operating_margin", "metric_operating_margin", "%"),
+                     ("owner_earnings", "axis_owner_earnings", "abs")),
             axes=history_axes,
         )
 
@@ -1068,8 +1227,8 @@ def demo(show: bool = False, output_dir: str = "output") -> List[str]:
         for g in growth_axis
     ]
     sensitivity = {
-        "x_label": "WACC", "x_values": wacc_axis, "y_label": "Crescita terminale",
-        "y_values": growth_axis, "z_label": "Valore per azione", "values": values,
+        "x_label": "WACC", "x_values": wacc_axis, "y_label": "Terminal growth",
+        "y_values": growth_axis, "z_label": "Value per share", "values": values,
     }
 
     outputs: List[str] = []
@@ -1108,5 +1267,7 @@ if __name__ == "__main__":
     for index, argument in enumerate(sys.argv):
         if argument == "--out" and index + 1 < len(sys.argv):
             target = sys.argv[index + 1]
+        if argument == "--lang" and index + 1 < len(sys.argv):
+            set_language(sys.argv[index + 1])
     print(f"Demo dei grafici con dati sintetici -> {target}/\n")
     demo(show=show_charts, output_dir=target)

@@ -9,6 +9,7 @@ Esempi::
     python run_analysis.py AAPL MSFT KO PG --backtest
     python run_analysis.py AAPL --growth 0.06 --wacc 0.09 --json
     python run_analysis.py --demo            # dati sintetici, senza rete
+    python run_analysis.py AAPL --lang it    # etichette dei grafici in italiano
 
 Ogni esecuzione produce: i report testuali a schermo, i grafici in PNG nella cartella
 di output e, con ``--json``, il dizionario completo dei risultati.
@@ -137,6 +138,7 @@ def build_charts(
         return []
 
     saved: List[str] = []
+    italian = visualize.get_language() == "it"
     rows = [_universe_row(analysis) for analysis in analyses]
 
     for analysis in analyses:
@@ -154,7 +156,8 @@ def build_charts(
         if valuation.get("sensitivity", {}).get("values"):
             saved.append(visualize.plot_sensitivity_surface(
                 valuation["sensitivity"], kind="surface", percent_axes=True,
-                title=f"Sensitivita' del valore · {ticker}",
+                title=(f"Sensitivita' del valore · {ticker}" if italian
+                       else f"Value sensitivity · {ticker}"),
                 save=f"{prefix}_sensitivita.png") and f"{prefix}_sensitivita.png")
         saved.append(visualize.create_tearsheet(
             quality=quality, valuation=valuation, backtest=backtest_result,
@@ -175,7 +178,8 @@ def build_charts(
     if sweep and sweep.get("values"):
         saved.append(visualize.plot_sensitivity_surface(
             sweep, kind="surface",
-            title="Robustezza della strategia ai parametri",
+            title=("Robustezza della strategia ai parametri" if italian
+                   else "Strategy robustness across parameters"),
             save=os.path.join(output_dir, "backtest_sensitivita.png"))
             and os.path.join(output_dir, "backtest_sensitivita.png"))
 
@@ -210,7 +214,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
     options: Dict[str, Any] = {
         "tickers": [], "out": "output", "backtest": False, "charts": True,
         "show": False, "json": False, "demo": False, "years": 10,
-        "growth": None, "wacc": None, "top_n": 5, "sweep": False,
+        "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en",
     }
     index = 0
     while index < len(argv):
@@ -235,6 +239,8 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["show"] = True; index += 1
         elif argument == "--json":
             options["json"] = True; index += 1
+        elif argument == "--lang" and index + 1 < len(argv):
+            options["lang"] = argv[index + 1]; index += 2
         elif argument == "--demo":
             options["demo"] = True; index += 1
         elif argument in ("-h", "--help"):
@@ -250,6 +256,9 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     options = _parse_args(list(argv if argv is not None else sys.argv[1:]))
+    if visualize is not None:
+        # I report a schermo restano in italiano; le etichette dei grafici seguono --lang.
+        visualize.set_language(options["lang"])
 
     if options["demo"]:
         if visualize is None:
