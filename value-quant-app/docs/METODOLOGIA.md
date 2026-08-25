@@ -8,13 +8,14 @@ e soprattutto **come si leggono i numeri che produce**.
 ## Indice
 
 1. [L'impianto: quattro domande, quattro moduli](#1-limpianto)
-2. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
-3. [Modulo 2 — Valuation](#3-modulo-2--valuation)
-4. [Modulo 3 — Backtest](#4-modulo-3--backtest)
-5. [Modulo 4 — Visualize](#5-modulo-4--visualize)
-6. [Come si usano insieme](#6-come-si-usano-insieme)
-7. [Glossario](#7-glossario)
-8. [Limiti e avvertenze](#8-limiti-e-avvertenze)
+2. [Modulo 0 — Profili di settore](#15-profili-di-settore)
+3. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
+4. [Modulo 2 — Valuation](#3-modulo-2--valuation)
+5. [Modulo 3 — Backtest](#4-modulo-3--backtest)
+6. [Modulo 4 — Visualize](#5-modulo-4--visualize)
+7. [Come si usano insieme](#6-come-si-usano-insieme)
+8. [Glossario](#7-glossario)
+9. [Limiti e avvertenze](#8-limiti-e-avvertenze)
 
 ---
 
@@ -26,6 +27,7 @@ precedente ha già risposto.
 
 | # | Domanda | Modulo | Output |
 |---|---|---|---|
+| 0 | *Che tipo di azienda è?* | `sectors.py` | profilo di metriche e soglie |
 | 1 | *È una buona azienda?* | `quality_score.py` | punteggio 0-100 |
 | 2 | *A che prezzo vale la pena comprarla?* | `valuation.py` | fair value e margine di sicurezza |
 | 3 | *Questa regola di selezione ha funzionato?* | `backtest.py` | equity curve e metriche di rischio |
@@ -41,6 +43,166 @@ Il modello separa i due giudizi apposta: non li mescola mai in un unico numero.
 l'hanno generato. Ogni output porta con sé una sezione `data_quality` che elenca cosa
 è stato stimato e cosa mancava. Un valore intrinseco senza le sue assunzioni è
 un'opinione travestita da calcolo.
+
+---
+
+
+<a name="15-profili-di-settore"></a>
+## 1-bis. Modulo 0 — Profili di settore
+
+**File**: `backend/models/sectors.py`
+**Domanda**: con quale metro va misurata questa azienda?
+
+### La radice: per una banca il debito è materia prima
+
+In un'azienda industriale il debito è *come ti finanzi* per comprare gli impianti con
+cui produci. In una banca il debito — depositi, obbligazioni, raccolta interbancaria —
+**è l'input produttivo**: la banca compra denaro a un tasso e lo rivende a un tasso più
+alto. Il margine di interesse *è* il ricavo.
+
+Da questo discende tutto il resto:
+
+- **Non esiste l'EBIT.** Non puoi "aggiungere indietro" gli oneri finanziari, perché
+  sono il costo del venduto. Quindi niente NOPAT, quindi **niente ROIC**.
+- **Debt/Equity 10x è normale.** Una banca con D/E di 1 sarebbe una banca che non fa il
+  suo mestiere.
+- **Interest Coverage non ha senso**: dividerebbe una grandezza inesistente per il costo
+  principale.
+- **Current Ratio non è definito**: lo stato patrimoniale bancario non è classificato in
+  corrente / non corrente.
+- **Il CapEx è irrilevante**, quindi gli Owner Earnings collassano sull'utile netto e non
+  aggiungono informazione.
+
+**Il pericolo non è l'errore, è il numero plausibile.** Applicare il profilo industriale
+a una banca non fa fallire il calcolo: produce un ROIC, un DCF, un fair value con due
+decimali. Un dato mancante avverte chi legge; un numero verosimile ma privo di
+significato no. È per questo che i profili esistono.
+
+### Cosa cambia, dimensione per dimensione
+
+| Dimensione | Industriale | Banca | Assicurazione |
+|---|---|---|---|
+| Redditività primaria | ROIC | **ROTCE** | **Combined ratio** + ROTCE |
+| "Margine lordo" | Margine lordo | **NIM** (margine di interesse / attivo) | Rendimento degli investimenti |
+| "Margine operativo" | Reddito op. / ricavi | **Efficiency ratio** (costi/ricavi, inverso) | — |
+| Generazione di valore | Owner Earnings | Crescita del **patrimonio tangibile/azione** | Crescita del **patrimonio/azione** |
+| Solidità #1 | Debt/Equity | **Patrimonio / attivo** (proxy di CET1) | Patrimonio / attivo |
+| Solidità #2 | Debt/EBITDA | **Loan-to-Deposit** | Debt/Equity |
+| Solidità #3 | Interest Coverage | **Costo del credito** | — |
+| Solidità #4 | Current Ratio | — | — |
+
+**Le soglie cambiano di un ordine di grandezza.** Un ROA dell'1% per una banca è buono;
+per un industriale è pessimo. È lo stesso numero che significa cose opposte, perché la
+banca lavora con leva ~10x. Applicare le soglie industriali (ROA: 1% → 0 punti, 12% →
+100) a una banca darebbe **zero a ogni banca del mondo**.
+
+Riferimenti del profilo bancario:
+
+| Metrica | 0 punti | 100 punti | Peso interno |
+|---|---|---|---|
+| ROTCE medio | 6% | 18% | 35% (profittabilità) |
+| ROE medio | 5% | 15% | 20% |
+| ROA medio | 0.40% | 1.50% | 20% |
+| Cost/Income | 75% | 50% | 15% |
+| NIM / attivo | 1.20% | 3.50% | 10% |
+| Patrimonio / attivo | 5% | 12% | 40% (solidità) |
+| Loan / Deposit | 1.10 | 0.70 | 30% |
+| Costo del credito | 1.50% | 0.20% | 30% |
+
+Il **loan-to-deposit sotto 1** significa finanziata dai depositi e non dal mercato: è la
+differenza fra una raccolta stabile e una che evapora in una crisi di fiducia.
+
+### Il profilo assicurativo e il problema di Berkshire
+
+Per un'assicurazione il perno è il **combined ratio** = (sinistri + spese) / premi. Sotto
+100 significa che l'assicurazione guadagna *sull'attività tecnica*, prima ancora dei
+rendimenti finanziari — è il meccanismo del *float* di Buffett: premi incassati oggi,
+sinistri pagati domani, cioè leva finanziaria a costo negativo.
+
+Ma c'è un secondo problema, contabile e insidioso. **Dal 2018 le regole GAAP obbligano a
+far transitare nel conto economico le plusvalenze e minusvalenze *non realizzate* del
+portafoglio titoli.** Per un'assicurazione con un grande portafoglio azionario — Berkshire
+sopra tutte — l'utile netto oscilla di decine di miliardi da un anno all'altro seguendo
+il mercato, non il business.
+
+Conseguenza pratica: **qualunque metrica di consistenza basata sull'utile netto dichiara
+Berkshire "instabile"**, il che è vero della contabilità e falso dell'azienda.
+
+Il profilo assicurativo risponde spostando il peso della consistenza sulla **crescita del
+patrimonio netto per azione** (35% della categoria) — il metro con cui Berkshire ha
+misurato sé stessa per decenni, e l'unico immune al rumore contabile — e allargando molto
+la soglia di variabilità accettata sul ROE (CV fino a 0.90 contro lo 0.60 industriale).
+
+### Come viene riconosciuto il settore
+
+Dalla **struttura del bilancio**, non dall'etichetta:
+
+1. presenza di **depositi** o di **margine di interesse** → banca;
+2. presenza di **premi assicurativi**, **riserve tecniche** o **sinistri** → assicurazione;
+3. altrimenti → industriale.
+
+Non si usa il campo `sector` di Yahoo perché mette "Financial Services" su banche,
+assicurazioni, asset manager e gestori di mercati, che vogliono metriche diverse, ed è un
+endpoint spesso non raggiungibile. In caso di dubbio si assume industriale — l'ipotesi più
+conservativa — e si può forzare con `--sector`.
+
+### Valutazione: il DCF va sostituito, non adattato
+
+Per un finanziario **non si può calcolare il free cash flow**, perché non si riesce a
+separare i flussi operativi da quelli di finanziamento: sono la stessa cosa.
+
+Si sostituisce con il **modello a rendimenti in eccesso** (residual income), lo standard
+accademico per le banche:
+
+```
+Valore = Patrimonio contabile
+       + Σ [(ROE_t − Ke) × Patrimonio_(t−1)] / (1 + Ke)^t
+```
+
+L'intuizione è elegante: una banca vale il suo patrimonio contabile, **più** il valore
+attualizzato di quanto rende *sopra* il costo del capitale. Se ROE = Ke vale esattamente
+il book value, né più né meno — ed è esattamente quello che un test verifica
+analiticamente.
+
+Funziona per i finanziari e non per gli industriali perché il patrimonio contabile di una
+banca è vicino al valore di mercato dei suoi attivi (crediti e titoli, largamente valutati
+a mercato), mentre per un industriale il book value non dice quasi nulla.
+
+**Il ROE del modello sfuma verso Ke** entro l'orizzonte esplicito: i rendimenti in eccesso
+si azzerano, quindi **non c'è valore terminale**. È la scelta più conservativa possibile —
+la stima non dipende da nessuna ipotesi oltre il decimo anno, che è invece il tallone
+d'Achille del DCF.
+
+Da qui deriva anche il **P/B giustificato**:
+
+```
+P/B = (ROE − g) / (Ke − g)
+```
+
+Una banca che rende il 15% con Ke 10% e crescita 3% dovrebbe trattare a
+`(0.15−0.03)/(0.10−0.03)` = **1.7x** il patrimonio tangibile. Se tratta a 1.0x, è a sconto.
+
+> **I due metodi incorporano ipotesi opposte sulla durata del vantaggio.** Il P/B
+> giustificato assume che il ROE resti sopra Ke *per sempre*; il residual income lo azzera
+> in dieci anni. La forbice fra i due **è** il valore attribuito alla durata del moat, e il
+> modello la dichiara con un avviso quando supera il 80%.
+
+**Si sconta al costo dell'equity, mai al WACC.** Il WACC ha senso solo quando il debito è
+finanziamento; per una banca sarebbe un errore concettuale, non un'imprecisione.
+
+Al posto del reverse DCF c'è il **ROE implicito nel prezzo**: quale redditività sostenibile
+il mercato sta già scontando. Ha lo stesso pregio dell'originale — non richiede di stimare
+il futuro, misura le aspettative già incorporate.
+
+### Il limite dichiarato: i ratios di vigilanza
+
+yfinance **non espone** CET1, NPL ratio, LCR, NSFR: quei numeri vivono nelle segnalazioni
+regolamentari (FR Y-9C per le holding bancarie USA, FFIEC/FDIC che hanno API pubbliche
+gratuite). Il profilo bancario usa quello che si ricostruisce dai prospetti — patrimonio
+su attivo come proxy di leva, costo del credito, loan-to-deposit — e **scrive in
+`data_quality.missing` che i ratios veri non ci sono**.
+
+Un proxy segnalato è onesto; un proxy spacciato per il ratio vero no.
 
 ---
 
@@ -812,8 +974,14 @@ python run_analysis.py AAPL MSFT KO PG JNJ V MA HD --backtest --json
 | **Look-ahead bias** | usare in una decisione passata dati non ancora disponibili allora |
 | **Margine di sicurezza** | sconto del prezzo rispetto al valore stimato |
 | **Moat** | vantaggio competitivo difendibile nel tempo |
+| **NIM** | Net Interest Margin: margine di interesse sugli attivi fruttiferi |
 | **NOPAT** | reddito operativo al netto delle imposte |
 | **Owner Earnings** | cassa estraibile senza indebolire l'azienda |
+| **Combined ratio** | (sinistri + spese) / premi: sotto 100 l'assicurazione guadagna sulla tecnica |
+| **CET1** | capitale di migliore qualità su attivi ponderati per il rischio (vigilanza) |
+| **Float** | premi incassati prima del pagamento dei sinistri: leva a costo potenzialmente negativo |
+| **Residual income** | valore = patrimonio + rendimenti sopra il costo del capitale |
+| **ROTCE** | rendimento sul patrimonio tangibile, avviamento escluso |
 | **Point-in-time** | usare solo informazioni disponibili alla data della decisione |
 | **Survivorship bias** | distorsione da esclusione delle aziende scomparse |
 | **Turnover** | quota di portafoglio scambiata a ogni ribilanciamento |
@@ -830,6 +998,12 @@ dieci, riporta i bilanci nella versione rivista, cambia le etichette delle voci 
 preavviso e occasionalmente restituisce valori sbagliati. Ogni numero prodotto dal
 modello eredita questa fragilità. La sezione `data_quality` di ogni output elenca cosa è
 stato stimato: leggerla non è opzionale.
+
+**Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni e
+aziende operative. Non copre casi di confine — asset manager, gestori di mercati,
+società immobiliari, utility regolate — che finiscono nel profilo industriale e vanno
+letti con cautela o forzati a mano. E per i finanziari mancano i ratios di vigilanza:
+il giudizio sulla solidità patrimoniale poggia su proxy dichiarati, non sui numeri veri.
 
 **Sul modello.** Tutte le soglie di punteggio, i pesi delle categorie e i default di
 valutazione sono **convenzioni ragionevoli**, non risultati di ottimizzazione. Sono

@@ -125,3 +125,122 @@ def make_prices(
 def make_benchmark(index: pd.Index, *, seed: int = 99) -> pd.Series:
     rng = np.random.default_rng(seed)
     return pd.Series(100.0 * np.exp(np.cumsum(rng.normal(0.00035, 0.010, len(index)))), index=index)
+
+
+# ---------------------------------------------------------------------------
+# Emittenti finanziari sintetici
+# ---------------------------------------------------------------------------
+
+
+def make_bank(
+    ticker: str = "BANCA",
+    *,
+    scale: float = 1.0,
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """Banca commerciale ben capitalizzata e finanziata dai depositi.
+
+    Numeri di riferimento (esercizio piu' recente): ROE 15%, ROA 1.5%, ROTCE 18%,
+    patrimonio/attivo 10%, impieghi/depositi 0.59, cost/income 56%.
+    """
+    count = len(years)
+    # Le colonne vanno dal piu' recente al piu' vecchio: il divisore cresce
+    # andando indietro nel tempo, cosi' la serie e' crescente nel tempo.
+    step = [1.0 + 0.04 * k for k in range(count)]
+
+    assets = [3000e9 * scale / s for s in step]
+    equity = [300e9 * scale / s for s in step]
+    goodwill = [50e9 * scale] * count
+    net_income = [45e9 * scale / s for s in step]
+    net_interest_income = [90e9 * scale / s for s in step]
+    fee_income = [70e9 * scale / s for s in step]
+    revenue = [n + f for n, f in zip(net_interest_income, fee_income)]
+
+    return {
+        "ticker": ticker,
+        "company_name": f"Banca {ticker}",
+        "currency": "USD",
+        "income_statement": frame({
+            "Total Revenue": revenue,
+            "Net Interest Income": net_interest_income,
+            "Total Non Interest Income": fee_income,
+            "Total Non Interest Expense": [r * 0.5625 for r in revenue],
+            "Credit Losses Provision": [8e9 * scale / s for s in step],
+            "Pretax Income": [n / 0.75 for n in net_income],
+            "Tax Provision": [n / 0.75 * 0.25 for n in net_income],
+            "Net Income": net_income,
+            "Interest Expense": [40e9 * scale / s for s in step],
+        }, years),
+        "balance_sheet": frame({
+            "Total Assets": assets,
+            "Total Liabilities Net Minority Interest": [a - e for a, e in zip(assets, equity)],
+            "Stockholders Equity": equity,
+            "Total Deposits": [a * 0.733 for a in assets],
+            "Net Loan": [a * 0.433 for a in assets],
+            "Goodwill": goodwill,
+            "Other Intangible Assets": [5e9 * scale] * count,
+            "Total Debt": [a * 0.10 for a in assets],
+            "Cash And Cash Equivalents": [a * 0.08 for a in assets],
+            "Ordinary Shares Number": [3e9] * count,
+        }, years),
+        "cash_flow": frame({
+            "Depreciation And Amortization": [2e9 * scale] * count,
+            "Capital Expenditure": [-3e9 * scale] * count,
+        }, years),
+        "years": list(years),
+        "data_quality": {"notes": [], "estimated": [], "missing": []},
+    }
+
+
+def make_insurer(
+    ticker: str = "ASSICURA",
+    *,
+    combined_ratio: float = 0.867,
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """Assicurazione danni con utile tecnico: combined ratio sotto 100.
+
+    Riferimento: combined ratio ~87%, ROE 15%, patrimonio/attivo 25%, Debt/Equity 0.25.
+    """
+    count = len(years)
+    step = [1.0 + 0.05 * k for k in range(count)]
+
+    premiums = [45e9 / s for s in step]
+    equity = [60e9 / s for s in step]
+    assets = [240e9 / s for s in step]
+    net_income = [9e9 / s for s in step]
+
+    return {
+        "ticker": ticker,
+        "company_name": f"Assicurazioni {ticker}",
+        "currency": "USD",
+        "income_statement": frame({
+            "Total Revenue": [p * 1.12 for p in premiums],
+            "Total Premiums Earned": premiums,
+            "Losses And Loss Adjustment Expenses": [p * combined_ratio * 0.69 for p in premiums],
+            "Underwriting Expense": [p * combined_ratio * 0.31 for p in premiums],
+            "Net Investment Income": [5e9 / s for s in step],
+            "Pretax Income": [n / 0.8 for n in net_income],
+            "Tax Provision": [n / 0.8 * 0.2 for n in net_income],
+            "Net Income": net_income,
+            "Interest Expense": [0.6e9] * count,
+        }, years),
+        "balance_sheet": frame({
+            "Total Assets": assets,
+            "Total Liabilities Net Minority Interest": [a - e for a, e in zip(assets, equity)],
+            "Stockholders Equity": equity,
+            "Total Investments": [a * 0.54 for a in assets],
+            "Total Policy Liabilities": [a * 0.55 for a in assets],
+            "Goodwill": [20e9] * count,
+            "Other Intangible Assets": [0.0] * count,
+            "Total Debt": [e * 0.25 for e in equity],
+            "Cash And Cash Equivalents": [a * 0.03 for a in assets],
+            "Ordinary Shares Number": [400e6] * count,
+        }, years),
+        "cash_flow": frame({
+            "Depreciation And Amortization": [0.4e9] * count,
+            "Capital Expenditure": [-0.5e9] * count,
+        }, years),
+        "years": list(years),
+        "data_quality": {"notes": [], "estimated": [], "missing": []},
+    }

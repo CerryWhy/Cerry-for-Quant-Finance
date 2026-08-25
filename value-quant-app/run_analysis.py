@@ -10,6 +10,8 @@ Esempi::
     python run_analysis.py AAPL --growth 0.06 --wacc 0.09 --json
     python run_analysis.py --demo            # dati sintetici, senza rete
     python run_analysis.py AAPL --lang it    # etichette dei grafici in italiano
+    python run_analysis.py JPM               # profilo bancario riconosciuto da solo
+    python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
 
 Ogni esecuzione produce: i report testuali a schermo, i grafici in PNG nella cartella
 di output e, con ``--json``, il dizionario completo dei risultati.
@@ -60,14 +62,21 @@ def analyze_ticker(
     years: int = 10,
     growth_override: Optional[float] = None,
     wacc_override: Optional[float] = None,
+    sector: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Qualita' + valutazione di un titolo, con un solo download dei bilanci."""
+    """Qualita' + valutazione di un titolo, con un solo download dei bilanci.
+
+    Il settore (industriale, banca, assicurazione) viene riconosciuto dalla struttura
+    del bilancio e decide sia le metriche sia i metodi di valutazione. Si puo' forzare
+    con ``sector`` quando il riconoscimento automatico sbaglia.
+    """
     financials = fetch_financials(ticker, years=years)
-    quality = calculate_quality_score(ticker, years=years, financials=financials)
+    quality = calculate_quality_score(ticker, years=years, financials=financials, sector=sector)
     market_data = fetch_market_data(ticker)
     valuation = calculate_valuation(
         ticker, financials=financials, market_data=market_data,
         growth_override=growth_override, wacc_override=wacc_override, years=years,
+        sector=sector,
     )
     return {
         "ticker": ticker.upper(),
@@ -85,6 +94,8 @@ def _universe_row(analysis: Dict[str, Any]) -> Dict[str, Any]:
         "ticker": analysis["ticker"],
         "quality_score": quality.get("quality_score"),
         "category_scores": quality.get("category_scores"),
+        "sector": quality.get("sector"),
+        "sector_label": quality.get("sector_label"),
         "margin_of_safety": valuation.get("margin_of_safety"),
         "price": valuation.get("price"),
         "fair_value": (valuation.get("fair_value") or {}).get("point"),
@@ -101,7 +112,8 @@ def print_summary_table(rows: Sequence[Dict[str, Any]]) -> None:
     print("=" * width)
     print(" RIEPILOGO UNIVERSO")
     print("=" * width)
-    print(f" {'Ticker':<8}{'Quality':>9}{'Prezzo':>12}{'Fair value':>13}{'Margine':>10}  Giudizio")
+    print(f" {'Ticker':<8}{'Quality':>9}{'Prezzo':>12}{'Fair value':>13}{'Margine':>10}"
+          f"  {'Profilo':<22}Giudizio")
     print(" " + "-" * (width - 2))
     for row in ordered:
         quality = row.get("quality_score")
@@ -112,9 +124,10 @@ def print_summary_table(rows: Sequence[Dict[str, Any]]) -> None:
         price_text = f"{price:,.2f}" if price else "n/d"
         fair_text = f"{fair_value:,.2f}" if fair_value else "n/d"
         margin_text = f"{margin * 100:+.1f}%" if margin is not None else "n/d"
+        profile_text = (row.get("sector_label") or "")[:20]
         print(
             f" {row['ticker']:<8}{quality_text:>9}{price_text:>12}"
-            f"{fair_text:>13}{margin_text:>10}  {row.get('verdict') or ''}"
+            f"{fair_text:>13}{margin_text:>10}  {profile_text:<22}{row.get('verdict') or ''}"
         )
     print("=" * width + "\n")
 
@@ -214,7 +227,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
     options: Dict[str, Any] = {
         "tickers": [], "out": "output", "backtest": False, "charts": True,
         "show": False, "json": False, "demo": False, "years": 10,
-        "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en",
+        "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None,
     }
     index = 0
     while index < len(argv):
@@ -239,6 +252,8 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["show"] = True; index += 1
         elif argument == "--json":
             options["json"] = True; index += 1
+        elif argument == "--sector" and index + 1 < len(argv):
+            options["sector"] = argv[index + 1]; index += 2
         elif argument == "--lang" and index + 1 < len(argv):
             options["lang"] = argv[index + 1]; index += 2
         elif argument == "--demo":
@@ -276,6 +291,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         analysis = analyze_ticker(
             ticker, years=options["years"],
             growth_override=options["growth"], wacc_override=options["wacc"],
+            sector=options["sector"],
         )
         analyses.append(analysis)
         print(format_report(analysis["quality"]))

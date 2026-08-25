@@ -120,6 +120,11 @@ DEFAULT_ASSUMPTIONS: Dict[str, Any] = {
     # Scenari
     "scenario_growth_delta": 0.04,
     "scenario_wacc_delta": 0.015,
+    "scenario_roe_delta": 0.03,       # ampiezza degli scenari sul ROE (finanziari)
+    # Rendimento in eccesso a fine periodo per i finanziari: zero significa che la
+    # concorrenza erode il vantaggio entro l'orizzonte, e il modello non dipende da
+    # ipotesi oltre il decimo anno.
+    "terminal_roe_premium": 0.000,
     # Soglia operativa
     "target_margin_of_safety": 0.30,
 }
@@ -131,6 +136,15 @@ AGGREGATE_WEIGHTS: Dict[str, float] = {
     "dcf_owner_earnings": 0.60,
     "epv": 0.15,
     "historical_multiples": 0.25,
+}
+
+#: Pesi per banche e assicurazioni. Il residual income guida (e' il modello corretto
+#: per il capitale di un finanziario), il P/B giustificato fa da controllo rapido sulla
+#: redditivita', i multipli storici da riferimento di mercato.
+FINANCIAL_AGGREGATE_WEIGHTS: Dict[str, float] = {
+    "residual_income": 0.50,
+    "justified_price_to_book": 0.30,
+    "historical_multiples": 0.20,
 }
 
 #: Metodi mostrati come riferimento ma **esclusi** dalla sintesi.
@@ -557,6 +571,195 @@ def epv_value_per_share(
     return result
 
 
+def residual_income_value_per_share(
+    book_value_per_share: Optional[float],
+    *,
+    return_on_equity: Optional[float],
+    cost_of_equity: float,
+    growth: float,
+    projection_years: int = 10,
+    fade_years: int = 5,
+    terminal_roe: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Modello a rendimenti in eccesso (residual income) — la valutazione dei finanziari.
+
+    Per una banca il DCF non e' applicabile: non esiste un flusso di cassa operativo
+    separabile da quello di finanziamento, perche' raccolta e impieghi *sono* l'attivita'.
+    Si valuta allora il capitale::
+
+        Valore = Patrimonio contabile
+               + valore attuale di [(ROE - Ke) x Patrimonio] per ogni anno
+
+    L'intuizione: una banca vale il suo patrimonio, **piu'** quanto riesce a rendere
+    *sopra* il costo del capitale. Se ROE = Ke vale esattamente il book value.
+
+    Funziona sui finanziari e non sugli industriali perche' il patrimonio contabile di
+    una banca e' vicino al valore di mercato dei suoi attivi (crediti e titoli, in buona
+    parte valutati a mercato), mentre per un industriale il valore sta in marchi e
+    posizione competitiva, che in bilancio non compaiono.
+
+    Args:
+        book_value_per_share: patrimonio (o patrimonio tangibile) per azione.
+        return_on_equity: ROE/ROTCE normalizzato, in forma decimale (``0.14`` = 14%).
+        cost_of_equity: Ke da CAPM. **Mai il WACC**: per un finanziario il debito e'
+            materia prima, non finanziamento.
+        growth: crescita annua del patrimonio.
+        terminal_roe: ROE a fine periodo. Il default e' ``cost_of_equity``, cioe' i
+            rendimenti in eccesso si azzerano: in quel caso non c'e' valore terminale
+            e la stima non dipende da ipotesi oltre l'orizzonte esplicito.
+    """
+    result: Dict[str, Any] = {
+        "value_per_share": None, "book_value": None, "pv_excess_returns": None,
+        "pv_terminal": None, "excess_returns": [], "error": None,
+    }
+    if book_value_per_share is None or return_on_equity is None:
+        result["error"] = "Patrimonio per azione o ROE non disponibile."
+        return result
+    if book_value_per_share <= 0:
+        result["error"] = "Patrimonio contabile non positivo: modello non applicabile."
+        return result
+    if cost_of_equity <= growth:
+        result["error"] = (
+            f"Costo dell'equity ({cost_of_equity:.2%}) non superiore alla crescita "
+            f"({growth:.2%}): il valore divergerebbe."
+        )
+        return result
+
+    terminal = cost_of_equity if terminal_roe is None else terminal_roe
+    path = growth_path(return_on_equity, terminal, projection_years, fade_years)
+
+    book = float(book_value_per_share)
+    present_value = 0.0
+    flows: List[Dict[str, float]] = []
+    for year, roe in enumerate(path, start=1):
+        # Il rendimento in eccesso si calcola sul patrimonio di **inizio** anno.
+        excess = (roe - cost_of_equity) * book
+        discounted = excess / ((1.0 + cost_of_equity) ** year)
+        present_value += discounted
+        flows.append({
+            "year": year, "roe": roe, "book_value": book,
+            "excess_return": excess, "present_value": discounted,
+        })
+        book *= (1.0 + growth)
+
+    pv_terminal = 0.0
+    if terminal > cost_of_equity:
+        terminal_excess = (terminal - cost_of_equity) * book
+        pv_terminal = (terminal_excess / (cost_of_equity - growth)) / (
+            (1.0 + cost_of_equity) ** len(path)
+        )
+
+    result.update({
+        "value_per_share": book_value_per_share + present_value + pv_terminal,
+        "book_value": book_value_per_share,
+        "pv_excess_returns": present_value,
+        "pv_terminal": pv_terminal,
+        "excess_returns": flows,
+    })
+    return result
+
+
+def justified_price_to_book(
+    book_value_per_share: Optional[float],
+    *,
+    return_on_equity: Optional[float],
+    cost_of_equity: float,
+    growth: float,
+) -> Dict[str, Any]:
+    """P/B giustificato dalla redditivita': ``(ROE - g) / (Ke - g)``.
+
+    Deriva dalla formula di Gordon applicata al patrimonio. Dice a quale multiplo del
+    patrimonio *dovrebbe* trattare un finanziario, dato quanto rende. Una banca che
+    rende il 15% con Ke 10% e crescita 3% vale ``(0.15-0.03)/(0.10-0.03)`` = 1.7 volte
+    il patrimonio tangibile; se tratta a 1.0x e' a sconto.
+
+    E' il controllo di realta' piu' rapido su un finanziario, e il motivo per cui i
+    multipli di patrimonio hanno senso qui e non su un'azienda asset-light.
+    """
+    result: Dict[str, Any] = {"value_per_share": None, "justified_multiple": None, "error": None}
+    if book_value_per_share is None or return_on_equity is None:
+        result["error"] = "Patrimonio per azione o ROE non disponibile."
+        return result
+    if book_value_per_share <= 0:
+        result["error"] = "Patrimonio contabile non positivo."
+        return result
+    if cost_of_equity <= growth:
+        result["error"] = "Costo dell'equity non superiore alla crescita."
+        return result
+    if return_on_equity <= growth:
+        result["error"] = (
+            f"ROE ({return_on_equity:.2%}) non superiore alla crescita ({growth:.2%}): "
+            "il multiplo giustificato sarebbe nullo o negativo."
+        )
+        return result
+
+    multiple = (return_on_equity - growth) / (cost_of_equity - growth)
+    result.update({
+        "justified_multiple": multiple,
+        "value_per_share": multiple * book_value_per_share,
+    })
+    return result
+
+
+def reverse_residual_income(
+    price: Optional[float],
+    book_value_per_share: Optional[float],
+    *,
+    cost_of_equity: float,
+    growth: float,
+    projection_years: int = 10,
+    fade_years: int = 5,
+    bounds: Tuple[float, float] = (0.0, 0.40),
+    tolerance: float = 1e-4,
+) -> Dict[str, Any]:
+    """ROE implicito nel prezzo: quale redditivita' sta gia' scontando il mercato?
+
+    E' l'equivalente del reverse DCF per i finanziari, e ha lo stesso pregio: non
+    richiede di stimare il futuro, misura le aspettative gia' incorporate nel prezzo.
+    Il confronto con il ROE storico dice quanto ottimismo (o pessimismo) stai comprando.
+    """
+    result: Dict[str, Any] = {"implied_roe": None, "at_bound": None, "error": None}
+    if price is None or price <= 0:
+        result["error"] = "Prezzo di mercato non disponibile."
+        return result
+    if book_value_per_share is None or book_value_per_share <= 0:
+        result["error"] = "Patrimonio per azione non disponibile o non positivo."
+        return result
+
+    def value_at(roe: float) -> Optional[float]:
+        return residual_income_value_per_share(
+            book_value_per_share, return_on_equity=roe, cost_of_equity=cost_of_equity,
+            growth=growth, projection_years=projection_years, fade_years=fade_years,
+        )["value_per_share"]
+
+    low, high = bounds
+    value_low, value_high = value_at(low), value_at(high)
+    if value_low is None or value_high is None:
+        result["error"] = "Modello non calcolabile con questi input."
+        return result
+    if price <= value_low:
+        result.update({"implied_roe": low, "at_bound": "min"})
+        return result
+    if price >= value_high:
+        result.update({"implied_roe": high, "at_bound": "max"})
+        return result
+
+    for _ in range(200):
+        middle = (low + high) / 2.0
+        value_middle = value_at(middle)
+        if value_middle is None:
+            break
+        if abs(value_middle - price) < tolerance * max(1.0, price):
+            result["implied_roe"] = middle
+            return result
+        if value_middle < price:
+            low = middle
+        else:
+            high = middle
+    result["implied_roe"] = (low + high) / 2.0
+    return result
+
+
 def graham_number(eps: Optional[float], book_value_per_share: Optional[float]) -> Optional[float]:
     """Graham Number = sqrt(22.5 * EPS * valore contabile per azione).
 
@@ -728,6 +931,280 @@ def sensitivity_grid(
 # ---------------------------------------------------------------------------
 
 
+def _financial_valuation(
+    *,
+    result: Dict[str, Any],
+    financials: Mapping[str, Any],
+    fundamentals: Dict[int, Dict[str, Optional[float]]],
+    sector: str,
+    capital: Mapping[str, Any],
+    price: Optional[float],
+    shares: Optional[float],
+    config: Mapping[str, Any],
+    quality: _DataQuality,
+    sectors_module: Any,
+    price_history: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Valutazione di banche e assicurazioni: residual income, P/B giustificato, multipli.
+
+    Tre differenze sostanziali rispetto al percorso industriale:
+
+    1. si sconta al **costo dell'equity**, mai al WACC — per un finanziario il debito e'
+       materia prima, non finanziamento, e un WACC sarebbe un errore concettuale;
+    2. la base non e' un flusso di cassa ma il **patrimonio contabile**, che per una
+       banca e' vicino al valore di mercato degli attivi;
+    3. la crescita che conta e' quella del **patrimonio per azione**, non dei ricavi.
+    """
+    fundamentals = sectors_module.extract_sector_fundamentals(
+        financials, sector, fundamentals, quality
+    )
+    metrics = sectors_module.build_metrics(fundamentals, sector, quality)
+    years_desc = sorted(fundamentals, reverse=True)
+
+    cost_of_equity = float(capital["cost_of_equity"])
+    normalization = str(config["normalization"])
+
+    # Per una banca il ROTCE e' il rendimento sul capitale che assorbe davvero le
+    # perdite; il ROE serve da riserva quando l'avviamento non e' separabile.
+    roe_percent = normalize_series(metrics.get("rotce", {}), normalization, quality, "ROTCE")
+    equity_basis = "tangible_book_per_share"
+    if roe_percent is None:
+        roe_percent = normalize_series(metrics.get("roe", {}), normalization, quality, "ROE")
+        equity_basis = "book_value_per_share"
+        quality.estimate("ROTCE non calcolabile: usato il ROE sul patrimonio contabile.")
+
+    book_series = metrics.get(equity_basis) or metrics.get("book_value_per_share") or {}
+    if not book_series and shares:
+        book_series = {
+            year: _safe_div(fundamentals[year].get("equity"), shares) for year in years_desc
+        }
+    book_value_per_share = normalize_series(book_series, "last", quality, "Patrimonio per azione")
+
+    growth_book = historical_cagr(book_series)
+    growth_used = growth_book if growth_book is not None else float(config["terminal_growth"])
+    if growth_book is None:
+        quality.estimate(
+            f"Crescita del patrimonio per azione non calcolabile: usata quella terminale "
+            f"({growth_used:.2%})."
+        )
+    raw_growth = growth_used
+    ceiling = min(float(config["max_growth"]), cost_of_equity - 0.02)
+    growth_used = max(float(config["min_growth"]), min(ceiling, growth_used))
+    if abs(growth_used - raw_growth) > 1e-9:
+        quality.note(
+            f"Crescita del patrimonio {raw_growth:.2%} riportata nel range prudenziale "
+            f"(massimo {ceiling:.2%}, sotto il costo dell'equity): {growth_used:.2%}."
+        )
+
+    return_on_equity = (roe_percent / 100.0) if roe_percent is not None else None
+    latest = fundamentals[years_desc[0]] if years_desc else {}
+    eps = _safe_div(latest.get("net_income"), shares)
+
+    result["inputs"] = {
+        "years_analyzed": years_desc,
+        "normalization": normalization,
+        "return_on_equity": _round(return_on_equity, 4),
+        "equity_basis": equity_basis,
+        "book_value_per_share": _round(book_value_per_share, 4),
+        "growth_book_value_cagr": _round(growth_book, 4),
+        "growth_used": _round(growth_used, 4),
+        "shares_outstanding": _round(shares, 0) if shares else None,
+        "eps": _round(eps, 4),
+        "equity_to_assets_avg": _round(_mean((metrics.get("equity_to_assets") or {}).values()), 3),
+    }
+
+    projection_years = int(config["projection_years"])
+    fade_years = int(config["fade_years"])
+    terminal_roe = cost_of_equity + float(config.get("terminal_roe_premium", 0.0))
+
+    residual = residual_income_value_per_share(
+        book_value_per_share, return_on_equity=return_on_equity,
+        cost_of_equity=cost_of_equity, growth=growth_used,
+        projection_years=projection_years, fade_years=fade_years, terminal_roe=terminal_roe,
+    )
+    if residual.get("error"):
+        quality.miss(f"Residual income: {residual['error']}")
+
+    justified = justified_price_to_book(
+        book_value_per_share, return_on_equity=return_on_equity,
+        cost_of_equity=cost_of_equity, growth=growth_used,
+    )
+    if justified.get("error"):
+        quality.miss(f"P/B giustificato: {justified['error']}")
+
+    multiples = historical_multiples_valuation(
+        fundamentals, price_history, shares=shares,
+        current_metrics={"eps": eps, "owner_earnings_per_share": None},
+        quality=quality,
+    )
+
+    graham = graham_number(eps, book_value_per_share)
+
+    result["methods"] = {
+        "residual_income": {
+            "label": "Residual income (rendimenti in eccesso)",
+            "value_per_share": _round(residual.get("value_per_share"), 2),
+            "book_value": _round(residual.get("book_value"), 2),
+            "pv_excess_returns": _round(residual.get("pv_excess_returns"), 2),
+            "error": residual.get("error"),
+        },
+        "justified_price_to_book": {
+            "label": "P/B giustificato dalla redditivita'",
+            "value_per_share": _round(justified.get("value_per_share"), 2),
+            "justified_multiple": _round(justified.get("justified_multiple"), 3),
+            "error": justified.get("error"),
+        },
+        "historical_multiples": {
+            "label": "Multipli storici del titolo",
+            "value_per_share": _round(multiples.get("value_per_share"), 2),
+            "detail": multiples.get("multiples"),
+            "error": multiples.get("error"),
+        },
+        "graham_number": {
+            "label": "Graham Number",
+            "value_per_share": _round(graham, 2),
+            "error": None if graham is not None else "Utili o patrimonio non positivi.",
+        },
+    }
+
+    # --- Sintesi --------------------------------------------------------------
+    contributions: Dict[str, Dict[str, float]] = {}
+    for name, weight in FINANCIAL_AGGREGATE_WEIGHTS.items():
+        value = result["methods"].get(name, {}).get("value_per_share")
+        if value is not None and value > 0:
+            contributions[name] = {"value": value, "weight": weight}
+    result["methods"]["graham_number"]["aggregated"] = False
+    for name in FINANCIAL_AGGREGATE_WEIGHTS:
+        result["methods"][name]["aggregated"] = name in contributions
+        result["methods"][name]["weight"] = 0.0
+    for name in (set(FINANCIAL_AGGREGATE_WEIGHTS) - set(contributions)):
+        quality.note(
+            f"Metodo '{name}' escluso dalla sintesi (non calcolabile): peso ridistribuito."
+        )
+
+    if contributions:
+        total_weight = sum(item["weight"] for item in contributions.values())
+        fair_value = sum(
+            item["value"] * item["weight"] for item in contributions.values()
+        ) / total_weight
+        for name, item in contributions.items():
+            result["methods"][name]["weight"] = _round(item["weight"] / total_weight, 4)
+        spread = [item["value"] for item in contributions.values()]
+        # I metodi incorporano ipotesi opposte sulla durata del vantaggio competitivo
+        # (il P/B giustificato lo assume perpetuo, il residual income lo azzera in N
+        # anni): una forbice ampia e' informazione, non rumore, e va dichiarata.
+        if min(spread) > 0 and max(spread) / min(spread) > 1.8:
+            quality.note(
+                f"I metodi divergono molto ({_round(min(spread), 2)} - {_round(max(spread), 2)}): "
+                "il fair value puntuale e' poco significativo, guardare l'intervallo."
+            )
+        result["fair_value"] = {
+            "point": _round(fair_value, 2),
+            "low": _round(min(spread), 2),
+            "high": _round(max(spread), 2),
+            "methods_used": len(contributions),
+            "weights": {name: _round(item["weight"] / total_weight, 3)
+                        for name, item in contributions.items()},
+        }
+        if price and price > 0:
+            result["margin_of_safety"] = _round((fair_value - price) / fair_value, 4)
+            result["upside_pct"] = _round((fair_value / price - 1.0) * 100.0, 2)
+            result["verdict"] = _verdict(result["margin_of_safety"])
+            target = float(config["target_margin_of_safety"])
+            result["buy_below"] = _round(fair_value * (1.0 - target), 2)
+            if book_value_per_share:
+                result["price_to_book"] = _round(price / book_value_per_share, 3)
+        else:
+            quality.miss("Prezzo non disponibile: margine di sicurezza non calcolabile.")
+    else:
+        result["error"] = "Nessun metodo di valutazione ha prodotto un valore positivo."
+
+    # --- Scenari --------------------------------------------------------------
+    roe_delta = float(config.get("scenario_roe_delta", 0.03))
+    wacc_delta = float(config["scenario_wacc_delta"])
+    if return_on_equity is not None:
+        scenarios = {
+            "bear": (return_on_equity - roe_delta, cost_of_equity + wacc_delta),
+            "base": (return_on_equity, cost_of_equity),
+            "bull": (return_on_equity + roe_delta, max(0.02, cost_of_equity - wacc_delta)),
+        }
+        for name, (scenario_roe, scenario_ke) in scenarios.items():
+            outcome = residual_income_value_per_share(
+                book_value_per_share, return_on_equity=scenario_roe,
+                cost_of_equity=scenario_ke,
+                growth=min(growth_used, scenario_ke - 0.02),
+                projection_years=projection_years, fade_years=fade_years,
+                terminal_roe=scenario_ke + float(config.get("terminal_roe_premium", 0.0)),
+            )
+            value = outcome.get("value_per_share")
+            result["scenarios"][name] = {
+                "return_on_equity": _round(scenario_roe, 4),
+                "cost_of_equity": _round(scenario_ke, 4),
+                "value_per_share": _round(value, 2),
+                "upside_pct": _round((value / price - 1.0) * 100.0, 2) if (value and price) else None,
+                "error": outcome.get("error"),
+            }
+
+    # --- ROE implicito nel prezzo --------------------------------------------
+    reverse = reverse_residual_income(
+        price, book_value_per_share, cost_of_equity=cost_of_equity, growth=growth_used,
+        projection_years=projection_years, fade_years=fade_years,
+    )
+    result["reverse_dcf"] = {
+        "model": "residual_income",
+        "implied_roe": _round(reverse.get("implied_roe"), 4),
+        "historical_roe": _round(return_on_equity, 4),
+        "at_bound": reverse.get("at_bound"),
+        "error": reverse.get("error"),
+    }
+    implied = reverse.get("implied_roe")
+    if implied is not None and return_on_equity is not None:
+        gap = implied - return_on_equity
+        result["reverse_dcf"]["gap_vs_historical"] = _round(gap, 4)
+        result["reverse_dcf"]["reading"] = (
+            "Il mercato sconta una redditivita' superiore a quella storica" if gap > 0.005
+            else "Il mercato sconta una redditivita' inferiore a quella storica" if gap < -0.005
+            else "Il mercato sconta all'incirca la redditivita' storica"
+        )
+
+    # --- Sensitivita': costo dell'equity x crescita del patrimonio -----------
+    if book_value_per_share and return_on_equity is not None:
+        ke_axis = [round(cost_of_equity + step * 0.01, 4) for step in (-2, -1, 0, 1, 2)]
+        ke_axis = [ke for ke in ke_axis if ke > 0.03]
+        growth_axis = [round(growth_used + step * 0.01, 4) for step in (-2, -1, 0, 1, 2)]
+        values: List[List[Optional[float]]] = []
+        upside: List[List[Optional[float]]] = []
+        for grid_growth in growth_axis:
+            row_values: List[Optional[float]] = []
+            row_upside: List[Optional[float]] = []
+            for grid_ke in ke_axis:
+                outcome = residual_income_value_per_share(
+                    book_value_per_share, return_on_equity=return_on_equity,
+                    cost_of_equity=grid_ke, growth=grid_growth,
+                    projection_years=projection_years, fade_years=fade_years,
+                    terminal_roe=grid_ke,
+                )
+                value = outcome.get("value_per_share")
+                row_values.append(_round(value, 2))
+                row_upside.append(
+                    _round((value / price - 1.0) * 100.0, 2) if (value and price) else None
+                )
+            values.append(row_values)
+            upside.append(row_upside)
+        result["sensitivity"] = {
+            "x_label": "Cost of equity", "x_values": ke_axis,
+            "y_label": "Book value growth", "y_values": growth_axis,
+            "z_label": "Value per share", "values": values, "upside_pct": upside,
+        }
+
+    quality.note(
+        "Profilo finanziario: DCF, EPV e NCAV non sono applicabili e non vengono "
+        "calcolati. Lo sconto avviene al costo dell'equity, non al WACC."
+    )
+    result["data_quality"] = quality.as_dict()
+    return result
+
+
 def _verdict(margin_of_safety: Optional[float]) -> str:
     if margin_of_safety is None:
         return "Non valutabile"
@@ -747,6 +1224,7 @@ def calculate_valuation(
     growth_override: Optional[float] = None,
     wacc_override: Optional[float] = None,
     years: int = 10,
+    sector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Valutazione completa di un titolo: fair value, margine di sicurezza, scenari.
 
@@ -759,6 +1237,9 @@ def calculate_valuation(
         price_history: serie storica dei prezzi, per la valutazione a multipli storici.
         growth_override: crescita esplicita imposta dall'utente (annua, es. ``0.08``).
         wacc_override: tasso di sconto imposto dall'utente.
+        sector: ``"industrial"``, ``"bank"`` o ``"insurance"``; se omesso viene
+            riconosciuto dal bilancio. Sui finanziari il DCF viene sostituito dal
+            residual income e lo sconto avviene al costo dell'equity.
         years: esercizi di bilancio da considerare.
 
     Returns:
@@ -777,6 +1258,7 @@ def calculate_valuation(
 
     result: Dict[str, Any] = {
         "ticker": ticker.upper(), "company_name": None, "currency": None,
+        "sector": None, "sector_label": None,
         "price": None, "fair_value": {}, "margin_of_safety": None, "verdict": "Non valutabile",
         "methods": {}, "scenarios": {}, "reverse_dcf": {}, "sensitivity": {},
         "cost_of_capital": {}, "inputs": {}, "assumptions": config,
@@ -797,7 +1279,14 @@ def calculate_valuation(
             quality.miss(message)
 
     try:
-        fundamentals = extract_fundamentals(financials, quality)
+        from . import sectors
+    except ImportError:
+        import sectors  # type: ignore[no-redef]
+    detected = sector if sector in sectors.PROFILES else sectors.detect_sector(financials, quality)
+    is_financial = detected in (sectors.BANK, sectors.INSURANCE)
+
+    try:
+        fundamentals = extract_fundamentals(financials, quality, sector=detected)
     except Exception as exc:  # pragma: no cover - difensivo
         result["error"] = f"Normalizzazione dei bilanci fallita: {exc}"
         result["data_quality"] = quality.as_dict()
@@ -808,9 +1297,10 @@ def calculate_valuation(
         result["data_quality"] = quality.as_dict()
         return result
 
-    owner_earnings = calculate_owner_earnings(fundamentals, quality)
-    for year, value in owner_earnings.items():
-        fundamentals[year]["owner_earnings"] = value
+    if not is_financial:
+        owner_earnings = calculate_owner_earnings(fundamentals, quality)
+        for year, value in owner_earnings.items():
+            fundamentals[year]["owner_earnings"] = value
 
     years_desc = sorted(fundamentals, reverse=True)
     latest = fundamentals[years_desc[0]]
@@ -857,6 +1347,24 @@ def calculate_valuation(
                                 for key, value in capital.items()}
     wacc = capital["wacc"]
     tax_rate = capital["tax_rate"]
+
+    # --- Bivio per settore ----------------------------------------------------
+    # Su una banca il DCF non e' impreciso: risponde a una domanda che per quel tipo di
+    # azienda non esiste. Da qui in poi i due percorsi sono metodi diversi, non soglie
+    # diverse.
+    result["sector"] = detected
+    result["sector_label"] = sectors.PROFILES[detected]["label"]
+
+    if detected in (sectors.BANK, sectors.INSURANCE):
+        return _financial_valuation(
+            result=result, financials=financials, fundamentals=fundamentals,
+            sector=detected, capital=capital, price=price, shares=shares,
+            config=config, quality=quality, sectors_module=sectors,
+            price_history=(
+                price_history if price_history is not None
+                else (fetch_price_history(ticker) if (live_mode and yf is not None) else None)
+            ),
+        )
 
     # --- Input normalizzati ---------------------------------------------------
     normalization = str(config["normalization"])
@@ -1024,6 +1532,14 @@ def calculate_valuation(
         # L'intervallo comprende anche gli scenari, che sono il modo piu' onesto di
         # rappresentare l'incertezza: un fair value puntuale e' sempre falsa precisione.
         spread = [item["value"] for item in contributions.values()]
+        # I metodi incorporano ipotesi opposte sulla durata del vantaggio competitivo
+        # (il P/B giustificato lo assume perpetuo, il residual income lo azzera in N
+        # anni): una forbice ampia e' informazione, non rumore, e va dichiarata.
+        if min(spread) > 0 and max(spread) / min(spread) > 1.8:
+            quality.note(
+                f"I metodi divergono molto ({_round(min(spread), 2)} - {_round(max(spread), 2)}): "
+                "il fair value puntuale e' poco significativo, guardare l'intervallo."
+            )
         result["fair_value"] = {
             "point": _round(fair_value, 2),
             "low": _round(min(spread), 2),
@@ -1152,39 +1668,72 @@ def format_valuation_report(result: Mapping[str, Any], max_notes: int = 10) -> s
 
     capital = result.get("cost_of_capital") or {}
     inputs = result.get("inputs") or {}
+    assumptions = result.get("assumptions") or {}
     lines.append("-" * width)
     lines.append(" IPOTESI")
     lines.append("-" * width)
-    lines.append(
-        f" WACC {_fmt((capital.get('wacc') or 0) * 100, 2)}%"
-        f"  =  Ke {_fmt((capital.get('cost_of_equity') or 0) * 100, 2)}%"
-        f" x {_fmt((capital.get('weight_equity') or 0) * 100, 1)}%"
-        f"  +  Kd netto {_fmt((capital.get('after_tax_cost_of_debt') or 0) * 100, 2)}%"
-        f" x {_fmt((capital.get('weight_debt') or 0) * 100, 1)}%"
-    )
-    lines.append(
-        f" Beta {_fmt(capital.get('beta'), 2)}"
-        f" | risk free {_fmt((capital.get('risk_free_rate') or 0) * 100, 2)}%"
-        f" | premio al rischio {_fmt((capital.get('equity_risk_premium') or 0) * 100, 2)}%"
-        f" | aliquota {_fmt((capital.get('tax_rate') or 0) * 100, 1)}%"
-    )
-    assumptions = result.get("assumptions") or {}
-    lines.append(
-        f" Crescita esplicita {_fmt((inputs.get('growth_used') or 0) * 100, 2)}%"
-        f" per {assumptions.get('projection_years')} anni"
-        f" (fade negli ultimi {assumptions.get('fade_years')})"
-        f" -> terminale {_fmt((assumptions.get('terminal_growth') or 0) * 100, 2)}%"
-    )
-    lines.append(
-        f" CAGR storici: Owner Earnings {_fmt((inputs.get('growth_owner_earnings_cagr') or 0) * 100, 1)}%"
-        f" | ricavi {_fmt((inputs.get('growth_revenue_cagr') or 0) * 100, 1)}%"
-        f" | utile netto {_fmt((inputs.get('growth_net_income_cagr') or 0) * 100, 1)}%"
-    )
-    lines.append(
-        f" Owner Earnings base ({inputs.get('normalization')}): {_fmt_big(inputs.get('base_owner_earnings'))}"
-        f" | debito netto {_fmt_big(inputs.get('net_debt'))}"
-        f" | azioni {_fmt_big(inputs.get('shares_outstanding'))}"
-    )
+    is_financial = result.get("sector") in ("bank", "insurance")
+    if result.get("sector_label"):
+        lines.append(f" Profilo di valutazione: {result['sector_label']}")
+
+    if is_financial:
+        # Per un finanziario il debito e' materia prima: si sconta al costo dell'equity,
+        # e la base non e' un flusso di cassa ma il patrimonio.
+        lines.append(
+            f" Costo dell'equity {_fmt((capital.get('cost_of_equity') or 0) * 100, 2)}%"
+            f"  =  risk free {_fmt((capital.get('risk_free_rate') or 0) * 100, 2)}%"
+            f"  +  beta {_fmt(capital.get('beta'), 2)}"
+            f" x premio {_fmt((capital.get('equity_risk_premium') or 0) * 100, 2)}%"
+        )
+        basis = "tangibile" if inputs.get("equity_basis") == "tangible_book_per_share" else "contabile"
+        lines.append(
+            f" Patrimonio {basis} per azione: {_fmt(inputs.get('book_value_per_share'), 2)} {currency}"
+            f" | ROE normalizzato ({inputs.get('normalization')}):"
+            f" {_fmt((inputs.get('return_on_equity') or 0) * 100, 2)}%"
+        )
+        lines.append(
+            f" Crescita del patrimonio: {_fmt((inputs.get('growth_used') or 0) * 100, 2)}%"
+            f" (storica {_fmt((inputs.get('growth_book_value_cagr') or 0) * 100, 2)}%)"
+            f" per {assumptions.get('projection_years')} anni,"
+            f" fade negli ultimi {assumptions.get('fade_years')}"
+        )
+        lines.append(
+            " Il rendimento in eccesso si azzera a fine periodo: nessun valore terminale."
+            if not assumptions.get("terminal_roe_premium")
+            else f" Premio di ROE terminale: {assumptions['terminal_roe_premium']:.2%}"
+        )
+        if result.get("price_to_book") is not None:
+            lines.append(f" Prezzo / patrimonio {basis}: {_fmt(result['price_to_book'], 2)}x")
+    else:
+        lines.append(
+            f" WACC {_fmt((capital.get('wacc') or 0) * 100, 2)}%"
+            f"  =  Ke {_fmt((capital.get('cost_of_equity') or 0) * 100, 2)}%"
+            f" x {_fmt((capital.get('weight_equity') or 0) * 100, 1)}%"
+            f"  +  Kd netto {_fmt((capital.get('after_tax_cost_of_debt') or 0) * 100, 2)}%"
+            f" x {_fmt((capital.get('weight_debt') or 0) * 100, 1)}%"
+        )
+        lines.append(
+            f" Beta {_fmt(capital.get('beta'), 2)}"
+            f" | risk free {_fmt((capital.get('risk_free_rate') or 0) * 100, 2)}%"
+            f" | premio al rischio {_fmt((capital.get('equity_risk_premium') or 0) * 100, 2)}%"
+            f" | aliquota {_fmt((capital.get('tax_rate') or 0) * 100, 1)}%"
+        )
+        lines.append(
+            f" Crescita esplicita {_fmt((inputs.get('growth_used') or 0) * 100, 2)}%"
+            f" per {assumptions.get('projection_years')} anni"
+            f" (fade negli ultimi {assumptions.get('fade_years')})"
+            f" -> terminale {_fmt((assumptions.get('terminal_growth') or 0) * 100, 2)}%"
+        )
+        lines.append(
+            f" CAGR storici: Owner Earnings {_fmt((inputs.get('growth_owner_earnings_cagr') or 0) * 100, 1)}%"
+            f" | ricavi {_fmt((inputs.get('growth_revenue_cagr') or 0) * 100, 1)}%"
+            f" | utile netto {_fmt((inputs.get('growth_net_income_cagr') or 0) * 100, 1)}%"
+        )
+        lines.append(
+            f" Owner Earnings base ({inputs.get('normalization')}): {_fmt_big(inputs.get('base_owner_earnings'))}"
+            f" | debito netto {_fmt_big(inputs.get('net_debt'))}"
+            f" | azioni {_fmt_big(inputs.get('shares_outstanding'))}"
+        )
     lines.append("")
 
     lines.append("-" * width)
@@ -1199,11 +1748,11 @@ def format_valuation_report(result: Mapping[str, Any], max_notes: int = 10) -> s
         else:
             tag = "escluso"
         if value is None:
-            lines.append(f" {method['label']:<34}{'n/d':>10}       {method.get('error', '')}")
+            lines.append(f" {method['label']:<44}{'n/d':>10}       {method.get('error', '')}")
             continue
         delta = f"{(value / price - 1.0) * 100:+.1f}%" if price else "n/d"
         lines.append(
-            f" {method['label']:<34}{_fmt(value, 2):>10} {currency:<4}"
+            f" {method['label']:<44}{_fmt(value, 2):>10} {currency:<4}"
             f" vs prezzo: {delta:>8}   [{tag}]"
         )
     lines.append("")
@@ -1211,21 +1760,42 @@ def format_valuation_report(result: Mapping[str, Any], max_notes: int = 10) -> s
     scenarios = result.get("scenarios") or {}
     if scenarios:
         lines.append("-" * width)
-        lines.append(" SCENARI (DCF)")
+        lines.append(" SCENARI (residual income)" if is_financial else " SCENARI (DCF)")
         lines.append("-" * width)
-        lines.append(f" {'Scenario':<10}{'crescita':>12}{'WACC':>10}{'valore':>12}{'upside':>12}")
+        first_label = "ROE" if is_financial else "crescita"
+        second_label = "Ke" if is_financial else "WACC"
+        lines.append(
+            f" {'Scenario':<10}{first_label:>12}{second_label:>10}{'valore':>12}{'upside':>12}"
+        )
         for name_scenario, scenario in scenarios.items():
+            first = scenario.get("return_on_equity") if is_financial else scenario.get("growth")
+            second = scenario.get("cost_of_equity") if is_financial else scenario.get("wacc")
             lines.append(
                 f" {name_scenario:<10}"
-                f"{_fmt((scenario.get('growth') or 0) * 100, 2) + '%':>12}"
-                f"{_fmt((scenario.get('wacc') or 0) * 100, 2) + '%':>10}"
+                f"{_fmt((first or 0) * 100, 2) + '%':>12}"
+                f"{_fmt((second or 0) * 100, 2) + '%':>10}"
                 f"{_fmt(scenario.get('value_per_share'), 2):>12}"
                 f"{(_fmt(scenario.get('upside_pct'), 1) + '%'):>12}"
             )
         lines.append("")
 
     reverse = result.get("reverse_dcf") or {}
-    if reverse.get("implied_growth") is not None:
+    if is_financial and reverse.get("implied_roe") is not None:
+        lines.append("-" * width)
+        lines.append(" ROE IMPLICITO - cosa sta scontando il mercato")
+        lines.append("-" * width)
+        lines.append(
+            f" Redditivita' implicita nel prezzo : {_fmt(reverse['implied_roe'] * 100, 2)}%"
+            + ("  (estremo della ricerca)" if reverse.get("at_bound") else "")
+        )
+        if reverse.get("historical_roe") is not None:
+            lines.append(
+                f" Redditivita' normalizzata        : {_fmt(reverse['historical_roe'] * 100, 2)}%"
+            )
+        if reverse.get("reading"):
+            lines.append(f" Lettura                          : {reverse['reading']}")
+        lines.append("")
+    elif reverse.get("implied_growth") is not None:
         lines.append("-" * width)
         lines.append(" REVERSE DCF - cosa sta scontando il mercato")
         lines.append("-" * width)
@@ -1244,9 +1814,13 @@ def format_valuation_report(result: Mapping[str, Any], max_notes: int = 10) -> s
     sensitivity = result.get("sensitivity") or {}
     if sensitivity.get("values"):
         lines.append("-" * width)
-        lines.append(" SENSITIVITA' - valore per azione (righe: crescita terminale, colonne: WACC)")
+        lines.append(
+            " SENSITIVITA' - valore per azione (righe: "
+            + ("crescita del patrimonio, colonne: costo dell'equity)" if is_financial
+               else "crescita terminale, colonne: WACC)")
+        )
         lines.append("-" * width)
-        corner = "g / WACC"
+        corner = "g / Ke" if is_financial else "g / WACC"
         header = f" {corner:<12}" + "".join(
             f"{value * 100:>11.2f}%" for value in sensitivity["x_values"]
         )

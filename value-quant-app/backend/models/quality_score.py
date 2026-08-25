@@ -381,14 +381,21 @@ def fetch_financials(ticker: str, years: int = DEFAULT_YEARS) -> Dict[str, Any]:
 def extract_fundamentals(
     financials: Mapping[str, Any],
     quality: Optional[_DataQuality] = None,
+    sector: Optional[str] = None,
 ) -> Dict[int, Dict[str, Optional[float]]]:
     """Normalizza i tre prospetti in un dizionario ``{anno: {voce: valore}}``.
 
     Applica i fallback tipici (EBIT da utile ante imposte + oneri finanziari,
     EBITDA da EBIT + D&A, debito totale da debito a breve + lungo termine, ...)
     e annota in ``quality`` ogni approssimazione effettuata.
+
+    Con ``sector`` bancario o assicurativo le derivazioni tipiche degli industriali
+    (EBIT, EBITDA, aliquota effettiva, capitale investito) vengono **saltate**: su un
+    finanziario non hanno significato, e calcolarle riempirebbe ``data_quality`` di
+    approssimazioni su grandezze che nessuno usera'.
     """
     quality = quality if quality is not None else _DataQuality()
+    operating = sector not in ("bank", "insurance")
 
     income_rows = _row_index(financials.get("income_statement"))
     balance_rows = _row_index(financials.get("balance_sheet"))
@@ -413,35 +420,37 @@ def extract_fundamentals(
         }
 
         # --- Conto economico -------------------------------------------------
-        if row["ebit"] is None and row["operating_income"] is not None:
+        if operating and row["ebit"] is None and row["operating_income"] is not None:
             row["ebit"] = row["operating_income"]
             quality.estimate(f"{year}: EBIT approssimato con il reddito operativo.")
-        if row["ebit"] is None and row["pretax_income"] is not None:
+        if operating and row["ebit"] is None and row["pretax_income"] is not None:
             interest = row["interest_expense"] or 0.0
             row["ebit"] = row["pretax_income"] + abs(interest)
             quality.estimate(
                 f"{year}: EBIT stimato come utile ante imposte + oneri finanziari."
             )
 
-        if row["operating_income"] is None and row["ebit"] is not None:
+        if operating and row["operating_income"] is None and row["ebit"] is not None:
             row["operating_income"] = row["ebit"]
             quality.estimate(f"{year}: reddito operativo approssimato con l'EBIT.")
 
         # D&A: preferenza al rendiconto finanziario, poi alla voce riconciliata.
-        if row["d_and_a"] is None and row["depreciation_income"] is not None:
+        if operating and row["d_and_a"] is None and row["depreciation_income"] is not None:
             row["d_and_a"] = row["depreciation_income"]
             quality.estimate(
                 f"{year}: D&A presa dalla voce 'Reconciled Depreciation' del conto economico."
             )
 
-        if row["ebitda"] is None and row["ebit"] is not None and row["d_and_a"] is not None:
+        if operating and row["ebitda"] is None and row["ebit"] is not None and row["d_and_a"] is not None:
             row["ebitda"] = row["ebit"] + abs(row["d_and_a"])
             quality.estimate(f"{year}: EBITDA stimato come EBIT + D&A.")
 
         # Aliquota fiscale effettiva, con clamp per evitare valori anomali.
         tax_rate = _safe_div(row["tax_provision"], row["pretax_income"])
         if tax_rate is None or not (0.0 <= tax_rate <= 0.60):
-            if tax_rate is not None:
+            if not operating:
+                pass
+            elif tax_rate is not None:
                 quality.estimate(
                     f"{year}: aliquota effettiva anomala ({tax_rate:.1%}), "
                     f"sostituita con il default {DEFAULT_TAX_RATE:.0%}."
@@ -462,18 +471,20 @@ def extract_fundamentals(
                 quality.estimate(
                     f"{year}: debito totale ricostruito come debito a breve + lungo termine."
                 )
-        if row["total_debt"] is None:
+        if operating and row["total_debt"] is None:
             quality.miss(f"{year}: debito totale non disponibile.")
 
         if row["equity"] is None and row["total_assets"] is not None and row["total_liabilities"] is not None:
             row["equity"] = row["total_assets"] - row["total_liabilities"]
             quality.estimate(f"{year}: patrimonio netto stimato come attivo - passivo.")
 
-        if row["cash"] is None:
+        if operating and row["cash"] is None:
             quality.miss(f"{year}: cassa e equivalenti non disponibili.")
 
         # --- Capitale investito ---------------------------------------------
-        debt = row["total_debt"]
+        # Non ha senso su un finanziario: il "capitale investito" di una banca sono i
+        # depositi della clientela, che non sono capitale dell'azionista.
+        debt = row["total_debt"] if operating else None
         equity = row["equity"]
         cash = row["cash"]
         if debt is not None and equity is not None:
@@ -493,7 +504,7 @@ def extract_fundamentals(
         # --- Rendiconto finanziario -----------------------------------------
         if row["capex"] is not None:
             row["capex"] = abs(row["capex"])
-        else:
+        elif operating:
             quality.miss(f"{year}: CapEx non disponibile.")
 
         fundamentals[year] = row
@@ -831,131 +842,55 @@ def _score_linear(
     return max(0.0, min(100.0, score))
 
 
-def _aggregate(components: Mapping[str, Dict[str, Any]]) -> Tuple[Optional[float], List[str]]:
-    """Media pesata dei componenti disponibili; i pesi mancanti sono ridistribuiti."""
-    usable = {k: c for k, c in components.items() if c.get("score") is not None}
-    skipped = [k for k in components if k not in usable]
-    total_weight = sum(c["weight"] for c in usable.values())
-    if total_weight <= 0:
-        return None, skipped
-    score = sum(c["score"] * c["weight"] for c in usable.values()) / total_weight
-    return score, skipped
+# Il motore di punteggio (soglie, pesi, ridistribuzione) vive in ``sectors.py``:
+# e' lo stesso per industriali, banche e assicurazioni, cambia solo il profilo.
 
 
-def _component(
-    label: str,
-    value: Optional[float],
-    score: Optional[float],
-    weight: float,
-    scale: str,
-) -> Dict[str, Any]:
+def _industrial_metrics(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    years: Sequence[int],
+    quality: _DataQuality,
+) -> Dict[str, Dict[int, Optional[float]]]:
+    """Serie annuali delle metriche di un'azienda operativa.
+
+    L'equivalente per banche e assicurazioni e' ``sectors.build_metrics``.
+    """
+    roic = calculate_roic(fundamentals, quality)
+    roe = calculate_roe(fundamentals, quality)
+    roa = calculate_roa(fundamentals, quality)
+    margins = calculate_margins(fundamentals, quality)
+    owner_earnings = calculate_owner_earnings(fundamentals, quality)
+    ratios = calculate_balance_sheet_ratios(fundamentals, quality)
+
+    owner_earnings_margin = {
+        year: _safe_div(owner_earnings.get(year), fundamentals[year].get("revenue"), scale=100.0)
+        for year in years
+    }
+
     return {
-        "label": label,
-        "value": _round(value, 3),
-        "score": _round(score, 1),
-        "weight": weight,
-        "scale": scale,
+        "revenue": {year: fundamentals[year].get("revenue") for year in years},
+        "net_income": {year: fundamentals[year].get("net_income") for year in years},
+        "ebit": {year: fundamentals[year].get("ebit") for year in years},
+        "ebitda": {year: fundamentals[year].get("ebitda") for year in years},
+        "invested_capital": {
+            year: fundamentals[year].get("invested_capital_calc") for year in years
+        },
+        "roic": roic,
+        "roe": roe,
+        "roa": roa,
+        "operating_margin": margins["operating_margin"],
+        "net_margin": margins["net_margin"],
+        "gross_margin": margins["gross_margin"],
+        "owner_earnings": owner_earnings,
+        "owner_earnings_margin": owner_earnings_margin,
+        "debt_to_equity": ratios["debt_to_equity"],
+        "debt_to_ebitda": ratios["debt_to_ebitda"],
+        "interest_coverage": ratios["interest_coverage"],
+        "current_ratio": ratios["current_ratio"],
+        "effective_tax_rate": {
+            year: (fundamentals[year].get("tax_rate") or 0.0) * 100.0 for year in years
+        },
     }
-
-
-def _score_profitability(
-    averages: Mapping[str, Optional[float]],
-) -> Tuple[Optional[float], Dict[str, Dict[str, Any]]]:
-    components = {
-        "roic": _component(
-            "ROIC medio (%)", averages.get("roic"),
-            _score_linear(averages.get("roic"), 4.0, 25.0), 0.35, "4% -> 0 | 25% -> 100",
-        ),
-        "roe": _component(
-            "ROE medio (%)", averages.get("roe"),
-            _score_linear(averages.get("roe"), 5.0, 25.0), 0.15, "5% -> 0 | 25% -> 100",
-        ),
-        "roa": _component(
-            "ROA medio (%)", averages.get("roa"),
-            _score_linear(averages.get("roa"), 1.0, 12.0), 0.15, "1% -> 0 | 12% -> 100",
-        ),
-        "operating_margin": _component(
-            "Margine operativo medio (%)", averages.get("operating_margin"),
-            _score_linear(averages.get("operating_margin"), 3.0, 25.0), 0.15,
-            "3% -> 0 | 25% -> 100",
-        ),
-        "net_margin": _component(
-            "Margine netto medio (%)", averages.get("net_margin"),
-            _score_linear(averages.get("net_margin"), 2.0, 20.0), 0.10,
-            "2% -> 0 | 20% -> 100",
-        ),
-        "owner_earnings_margin": _component(
-            "Owner Earnings / Ricavi medio (%)", averages.get("owner_earnings_margin"),
-            _score_linear(averages.get("owner_earnings_margin"), 2.0, 18.0), 0.10,
-            "2% -> 0 | 18% -> 100",
-        ),
-    }
-    score, _ = _aggregate(components)
-    return score, components
-
-
-def _score_consistency(
-    consistency: Mapping[str, Mapping[str, Optional[float]]],
-) -> Tuple[Optional[float], Dict[str, Dict[str, Any]]]:
-    roic_cv = consistency.get("roic", {}).get("coefficient_of_variation")
-    margin_cv = consistency.get("net_margin", {}).get("coefficient_of_variation")
-    revenue_growth = consistency.get("revenue", {}).get("growth_years_pct")
-    oe_growth = consistency.get("owner_earnings", {}).get("growth_years_pct")
-    positive_years = consistency.get("net_income", {}).get("positive_years_pct")
-
-    components = {
-        "roic_stability": _component(
-            "Coeff. di variazione ROIC", roic_cv,
-            _score_linear(roic_cv, 0.60, 0.05), 0.30, "0.60 -> 0 | 0.05 -> 100 (inverso)",
-        ),
-        "margin_stability": _component(
-            "Coeff. di variazione margine netto", margin_cv,
-            _score_linear(margin_cv, 0.60, 0.05), 0.20, "0.60 -> 0 | 0.05 -> 100 (inverso)",
-        ),
-        "revenue_growth_years": _component(
-            "Anni di crescita dei ricavi (%)", revenue_growth,
-            _score_linear(revenue_growth, 40.0, 100.0), 0.20, "40% -> 0 | 100% -> 100",
-        ),
-        "owner_earnings_growth_years": _component(
-            "Anni di crescita degli Owner Earnings (%)", oe_growth,
-            _score_linear(oe_growth, 40.0, 100.0), 0.15, "40% -> 0 | 100% -> 100",
-        ),
-        "profitable_years": _component(
-            "Anni con utile netto positivo (%)", positive_years,
-            _score_linear(positive_years, 60.0, 100.0), 0.15, "60% -> 0 | 100% -> 100",
-        ),
-    }
-    score, _ = _aggregate(components)
-    return score, components
-
-
-def _score_balance_sheet(
-    averages: Mapping[str, Optional[float]],
-) -> Tuple[Optional[float], Dict[str, Dict[str, Any]]]:
-    components = {
-        "debt_to_equity": _component(
-            "Debt/Equity medio", averages.get("debt_to_equity"),
-            _score_linear(averages.get("debt_to_equity"), 2.50, 0.10), 0.30,
-            "2.5 -> 0 | 0.1 -> 100 (inverso)",
-        ),
-        "debt_to_ebitda": _component(
-            "Debt/EBITDA medio", averages.get("debt_to_ebitda"),
-            _score_linear(averages.get("debt_to_ebitda"), 4.00, 0.50), 0.30,
-            "4.0 -> 0 | 0.5 -> 100 (inverso)",
-        ),
-        "interest_coverage": _component(
-            "Interest Coverage medio", averages.get("interest_coverage"),
-            _score_linear(averages.get("interest_coverage"), 2.0, 15.0), 0.25,
-            "2x -> 0 | 15x -> 100",
-        ),
-        "current_ratio": _component(
-            "Current Ratio medio", averages.get("current_ratio"),
-            _score_linear(averages.get("current_ratio"), 0.80, 2.00), 0.15,
-            "0.8 -> 0 | 2.0 -> 100",
-        ),
-    }
-    score, _ = _aggregate(components)
-    return score, components
 
 
 def _rating(score: Optional[float]) -> str:
@@ -1008,6 +943,7 @@ def calculate_quality_score(
     weights: Optional[Mapping[str, float]] = None,
     years: int = DEFAULT_YEARS,
     financials: Optional[Mapping[str, Any]] = None,
+    sector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calcola il Quality Score (0-100) di un'azienda.
 
@@ -1019,6 +955,11 @@ def calculate_quality_score(
         years: numero massimo di esercizi da analizzare.
         financials: bilanci gia' scaricati (output di :func:`fetch_financials`).
             Utile per test offline o per evitare download ripetuti.
+        sector: ``"industrial"``, ``"bank"`` o ``"insurance"``. Se omesso viene
+            riconosciuto dalla struttura del bilancio (presenza di depositi, di premi
+            assicurativi). Il settore determina **quali** metriche vengono calcolate e
+            con quali soglie: applicare il metro industriale a una banca produce numeri
+            plausibili e privi di significato.
 
     Returns:
         Dizionario con ``quality_score``, ``rating``, ``category_scores`` (punteggio
@@ -1034,6 +975,8 @@ def calculate_quality_score(
         "ticker": ticker.upper(),
         "company_name": None,
         "currency": None,
+        "sector": None,
+        "sector_label": None,
         "years_analyzed": [],
         "quality_score": None,
         "rating": "Non valutabile",
@@ -1073,8 +1016,20 @@ def calculate_quality_score(
     result["company_name"] = financials.get("company_name")
     result["currency"] = financials.get("currency")
 
+    # Import ritardato: sectors importa da questo modulo, a livello globale sarebbe un ciclo.
     try:
-        fundamentals = extract_fundamentals(financials, quality)
+        from . import sectors
+    except ImportError:
+        import sectors  # type: ignore[no-redef]
+
+    if sector is None:
+        sector = sectors.detect_sector(financials, quality)
+    elif sector not in sectors.PROFILES:
+        quality.note(f"Settore '{sector}' sconosciuto: uso il profilo industriale.")
+        sector = sectors.INDUSTRIAL
+
+    try:
+        fundamentals = extract_fundamentals(financials, quality, sector=sector)
     except Exception as exc:  # pragma: no cover - difensivo
         result["error"] = f"Normalizzazione dei bilanci fallita: {exc}"
         result["data_quality"] = quality.as_dict()
@@ -1089,55 +1044,32 @@ def calculate_quality_score(
     fundamentals = {year: fundamentals[year] for year in years_desc}
     result["years_analyzed"] = years_desc
 
+    # --- Settore --------------------------------------------------------------
+    profile = sectors.PROFILES[sector]
+    result["sector"] = sector
+    result["sector_label"] = profile["label"]
+    if sector != sectors.INDUSTRIAL:
+        fundamentals = sectors.extract_sector_fundamentals(
+            financials, sector, fundamentals, quality
+        )
+
     # --- Metriche anno per anno ---------------------------------------------
-    roic = calculate_roic(fundamentals, quality)
-    roe = calculate_roe(fundamentals, quality)
-    roa = calculate_roa(fundamentals, quality)
-    margins = calculate_margins(fundamentals, quality)
-    owner_earnings = calculate_owner_earnings(fundamentals, quality)
-    ratios = calculate_balance_sheet_ratios(fundamentals, quality)
+    if sector != sectors.INDUSTRIAL:
+        metrics: Dict[str, Dict[int, Optional[float]]] = sectors.build_metrics(
+            fundamentals, sector, quality
+        )
+    else:
+        metrics = _industrial_metrics(fundamentals, years_desc, quality)
 
-    owner_earnings_margin = {
-        year: _safe_div(owner_earnings.get(year), fundamentals[year].get("revenue"), scale=100.0)
-        for year in years_desc
-    }
-
-    metrics: Dict[str, Dict[int, Optional[float]]] = {
-        "revenue": {year: fundamentals[year].get("revenue") for year in years_desc},
-        "net_income": {year: fundamentals[year].get("net_income") for year in years_desc},
-        "ebit": {year: fundamentals[year].get("ebit") for year in years_desc},
-        "ebitda": {year: fundamentals[year].get("ebitda") for year in years_desc},
-        "invested_capital": {
-            year: fundamentals[year].get("invested_capital_calc") for year in years_desc
-        },
-        "roic": roic,
-        "roe": roe,
-        "roa": roa,
-        "operating_margin": margins["operating_margin"],
-        "net_margin": margins["net_margin"],
-        "gross_margin": margins["gross_margin"],
-        "owner_earnings": owner_earnings,
-        "owner_earnings_margin": owner_earnings_margin,
-        "debt_to_equity": ratios["debt_to_equity"],
-        "debt_to_ebitda": ratios["debt_to_ebitda"],
-        "interest_coverage": ratios["interest_coverage"],
-        "current_ratio": ratios["current_ratio"],
-        "effective_tax_rate": {
-            year: (fundamentals[year].get("tax_rate") or 0.0) * 100.0 for year in years_desc
-        },
-    }
     result["metrics"] = {
         name: {year: _round(series.get(year), 4) for year in years_desc}
         for name, series in metrics.items()
     }
 
     # --- Consistenza ---------------------------------------------------------
-    consistency_targets = (
-        "roic", "roe", "roa", "operating_margin", "net_margin",
-        "revenue", "net_income", "owner_earnings",
-    )
     consistency = {
-        name: calculate_consistency(metrics[name]) for name in consistency_targets
+        name: calculate_consistency(metrics[name])
+        for name in sectors.CONSISTENCY_TARGETS[sector] if name in metrics
     }
     result["consistency"] = {
         name: {key: _round(value, 4) for key, value in stats.items()}
@@ -1145,36 +1077,16 @@ def calculate_quality_score(
     }
 
     # --- Medie ---------------------------------------------------------------
-    average_targets = (
-        "roic", "roe", "roa", "operating_margin", "net_margin", "gross_margin",
-        "owner_earnings", "owner_earnings_margin",
-        "debt_to_equity", "debt_to_ebitda", "interest_coverage", "current_ratio",
-    )
-    averages = {name: _mean(metrics[name].values()) for name in average_targets}
+    averages = {
+        name: _mean(metrics[name].values())
+        for name in sectors.AVERAGE_TARGETS[sector] if name in metrics
+    }
     result["averages"] = {name: _round(value, 4) for name, value in averages.items()}
 
     # --- Punteggi ------------------------------------------------------------
-    profitability_score, profitability_components = _score_profitability(averages)
-    consistency_score, consistency_components = _score_consistency(consistency)
-    balance_score, balance_components = _score_balance_sheet(averages)
-
-    categories = {
-        "profitability": {
-            "score": _round(profitability_score, 1),
-            "weight": weights_used["profitability"],
-            "components": profitability_components,
-        },
-        "consistency": {
-            "score": _round(consistency_score, 1),
-            "weight": weights_used["consistency"],
-            "components": consistency_components,
-        },
-        "balance_sheet": {
-            "score": _round(balance_score, 1),
-            "weight": weights_used["balance_sheet"],
-            "components": balance_components,
-        },
-    }
+    categories = sectors.score_categories(profile, averages, consistency, quality)
+    for name, category in categories.items():
+        category["weight"] = weights_used[name]
     result["category_scores"] = categories
 
     available = {
@@ -1269,6 +1181,8 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
     years = result.get("years_analyzed") or []
     if years:
         lines.append(f" Esercizi analizzati: {len(years)} ({min(years)}-{max(years)})")
+    if result.get("sector_label"):
+        lines.append(f" Profilo di analisi: {result['sector_label']}")
     if result.get("currency"):
         lines.append(f" Valuta di bilancio: {result['currency']}")
     lines.append("")
@@ -1277,14 +1191,9 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
     lines.append("-" * width)
     lines.append(" PUNTEGGI PER CATEGORIA")
     lines.append("-" * width)
-    labels = {
-        "profitability": "Profittabilita' / ROIC",
-        "consistency": "Consistenza",
-        "balance_sheet": "Solidita' di bilancio",
-    }
     for key, category in (result.get("category_scores") or {}).items():
         lines.append(
-            f" {labels.get(key, key):<26} peso {category['weight'] * 100:>5.1f}%   "
+            f" {category.get('label', key):<30} peso {category['weight'] * 100:>5.1f}%   "
             f"punteggio {_fmt(category['score'], 1):>6} / 100"
         )
         for component in category.get("components", {}).values():
@@ -1297,21 +1206,13 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
     # --- Tabella anno per anno ----------------------------------------------
     metrics = result.get("metrics") or {}
     if years:
-        table_rows = [
-            ("Ricavi", "revenue", "big"),
-            ("Utile netto", "net_income", "big"),
-            ("Owner Earnings", "owner_earnings", "big"),
-            ("ROIC %", "roic", "pct"),
-            ("ROE %", "roe", "pct"),
-            ("ROA %", "roa", "pct"),
-            ("Margine operativo %", "operating_margin", "pct"),
-            ("Margine netto %", "net_margin", "pct"),
-            ("Owner Earn. / Ricavi %", "owner_earnings_margin", "pct"),
-            ("Debt / Equity", "debt_to_equity", "ratio"),
-            ("Debt / EBITDA", "debt_to_ebitda", "ratio"),
-            ("Interest Coverage", "interest_coverage", "ratio"),
-            ("Current Ratio", "current_ratio", "ratio"),
-        ]
+        try:
+            from . import sectors
+        except ImportError:
+            import sectors  # type: ignore[no-redef]
+        table_rows = sectors.TABLE_ROWS.get(
+            result.get("sector") or sectors.INDUSTRIAL, sectors.TABLE_ROWS[sectors.INDUSTRIAL]
+        )
         lines.append("-" * width)
         lines.append(" METRICHE ANNO PER ANNO (dal piu' recente)")
         lines.append("-" * width)

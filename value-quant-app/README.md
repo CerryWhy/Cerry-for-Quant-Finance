@@ -13,8 +13,9 @@ value-quant-app/
 │   ├── quality_score.py         "e' una buona azienda?"      -> punteggio 0-100
 │   ├── valuation.py             "a che prezzo vale la pena?" -> fair value e sconto
 │   ├── backtest.py              "questa regola ha funzionato?" -> equity curve e rischio
+│   ├── sectors.py               profili industriale / banca / assicurazione
 │   └── visualize.py             tear sheet e grafici in tema scuro
-└── tests/                       35 test offline, nessuna rete richiesta
+└── tests/                       44 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
@@ -57,6 +58,49 @@ Il tear sheet completo — numeri chiave, valutazione, profilo di qualita', stor
 |---|---|
 | ![Heatmap](docs/esempi/universe_heatmap.png) | ![Matrice](docs/esempi/quality_value_scatter.png) |
 
+Lo stesso tear sheet su una **banca**: metriche, assi del radar e metodi di valutazione
+cambiano insieme al profilo di settore — ROTCE al posto del ROIC, residual income al
+posto del DCF.
+
+![Tear sheet bancario](docs/esempi/tearsheet_banca.png)
+
+---
+
+## 0. Profili di settore — `backend/models/sectors.py`
+
+Il metro di un'azienda industriale non si applica a una banca, e non e' questione di
+tarare qualche soglia: **cambia l'oggetto della misurazione**. Per un industriale il
+debito e' come ti finanzi; per una banca il debito (depositi, raccolta) e' la **materia
+prima**. Da questo discende che su una banca non esiste l'EBIT, quindi niente NOPAT e
+**niente ROIC**; che Debt/Equity 10x e' normale; che il Current Ratio non e' nemmeno
+definito.
+
+Il problema e' che applicare il profilo sbagliato non produce un errore: produce
+**numeri plausibili e privi di significato**, che e' molto peggio.
+
+| | Industriale | Banca | Assicurazione |
+|---|---|---|---|
+| Redditivita' | ROIC, Owner Earnings | ROTCE, NIM, Cost/Income | Combined ratio, ROTCE |
+| Solidita' | Debt/Equity, Interest Coverage | Patrimonio/attivo, impieghi/depositi, costo del credito | Patrimonio/attivo, Debt/Equity |
+| Consistenza | CV del ROIC, crescita OE | CV del ROTCE, crescita patrimonio tangibile | Crescita patrimonio/azione, stabilita' tecnica |
+| Valutazione | DCF Owner Earnings, EPV | Residual income, P/B giustificato | Residual income, P/B giustificato |
+| Sconto al | WACC | **costo dell'equity** | **costo dell'equity** |
+
+Il riconoscimento e' automatico e guarda la **struttura del bilancio** (presenza di
+depositi, di premi assicurativi), non l'etichetta di settore di Yahoo — che mette
+"Financial Services" su banche, assicurazioni, asset manager e borse, soggetti che
+vogliono trattamenti diversi. Si puo' forzare con `--sector bank|insurance|industrial`.
+
+```bash
+python run_analysis.py JPM                      # profilo bancario riconosciuto da solo
+python run_analysis.py BRK-B --sector insurance # profilo forzato a mano
+```
+
+**Limite dichiarato**: yfinance non espone i ratios di vigilanza (CET1, NPL, LCR), che
+vivono nelle segnalazioni regolamentari. Il profilo bancario usa patrimonio/attivo e
+costo del credito come proxy e lo scrive in `data_quality.missing`. Un proxy segnalato
+e' onesto; un proxy spacciato per il ratio vero no.
+
 ---
 
 ## 1. Quality Score — `backend/models/quality_score.py`
@@ -89,6 +133,12 @@ python backend/models/quality_score.py AAPL MSFT
 | **EPV (Greenwald)** | quanto varrebbe se non crescesse mai piu' — il pavimento |
 | **Multipli storici** | com'e' prezzata rispetto alla propria mediana storica |
 | **Graham Number / NCAV** | riferimenti deep value (mostrati, esclusi dalla sintesi) |
+
+Sui **finanziari** questi metodi vengono sostituiti, non adattati: il DCF non e'
+applicabile perche' non esiste un flusso di cassa operativo separabile da quello di
+finanziamento. Al suo posto il **residual income** (`Valore = Patrimonio + valore
+attuale di (ROE − Ke) × Patrimonio`), il **P/B giustificato** `(ROE − g)/(Ke − g)`, e al
+posto del reverse DCF il **ROE implicito nel prezzo**.
 
 Il DCF e' a due stadi con *fade*: N anni di crescita esplicita e poi discesa lineare
 verso la crescita terminale, così da evitare il salto artificiale che gonfia i DCF
@@ -196,19 +246,25 @@ Le approssimazioni tipiche:
 
 ## Test
 
-35 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
+44 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
 
 ```bash
 python tests/test_quality_score.py    # metriche di bilancio e consistenza
 python tests/test_valuation.py        # DCF, reverse DCF, EPV, WACC (verifiche analitiche)
 python tests/test_backtest.py         # point-in-time, metriche di rischio, sweep
+python tests/test_sectors.py          # banche e assicurazioni: metriche e metodi giusti
 python tests/test_pipeline.py         # integrazione: i grafici sui dizionari reali
 ```
 
 Dove possibile i test non confrontano con "un numero che sembra giusto" ma con il
 risultato che la formula deve dare per costruzione: il DCF a crescita zero deve valere
 esattamente `flusso / tasso`, il reverse DCF deve ritrovare la crescita da cui e'
-partito, una serie confrontata con se stessa deve avere beta 1 e alpha 0.
+partito, il residual income con ROE uguale al costo dell'equity deve valere esattamente
+il patrimonio contabile, una serie confrontata con se stessa deve avere beta 1 e alpha 0.
+
+Un test merita una menzione a parte: `test_niente_metriche_industriali_sui_finanziari`
+verifica che su una banca il modello **non produca** ROIC e Owner Earnings. Un numero
+mancante avverte chi legge; un numero plausibile ma privo di significato no.
 
 ## Avvertenza
 

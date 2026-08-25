@@ -62,10 +62,12 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     "PALETTE",
+    "RADAR_LABELS",
     "apply_style",
     "STRINGS",
     "create_tearsheet",
     "demo",
+    "history_metrics",
     "get_language",
     "set_language",
     "plot_equity_curve",
@@ -119,6 +121,17 @@ STRINGS: Dict[str, Tuple[str, str]] = {
     "metric_net_margin": ("Margine netto", "Net margin"),
     "metric_debt_equity": ("Debt / Equity", "Debt / Equity"),
     "metric_interest_coverage": ("Interest Coverage", "Interest coverage"),
+    "metric_rotce": ("ROTCE", "ROTCE"),
+    "metric_nim": ("Margine di interesse %", "Net interest margin %"),
+    "metric_efficiency": ("Cost / Income %", "Cost / Income %"),
+    "metric_tbvps": ("Patrimonio tangibile/azione", "Tangible book / share"),
+    "metric_cost_of_risk": ("Costo del credito %", "Cost of risk %"),
+    "metric_loan_deposit": ("Impieghi / depositi", "Loans / deposits"),
+    "metric_combined_ratio": ("Combined ratio", "Combined ratio"),
+    "metric_roe": ("ROE %", "ROE %"),
+    "metric_bvps": ("Patrimonio / azione", "Book value / share"),
+    "metric_investment_yield": ("Rendimento investimenti %", "Investment yield %"),
+    "metric_premiums": ("Premi", "Premiums earned"),
     "col_quality_score": ("Quality Score", "Quality Score"),
     "col_profitability": ("Profittabilita'", "Profitability"),
     "col_consistency": ("Consistenza", "Consistency"),
@@ -186,7 +199,93 @@ DATA_LABELS: Dict[str, Tuple[str, str]] = {
     "NCAV (net-net)": ("NCAV (net-net)", "NCAV (net-net)"),
     "Multipli storici del titolo": ("Multipli storici del titolo", "Own historical multiples"),
     "Multipli storici": ("Multipli storici", "Historical multiples"),
+    "Residual income (rendimenti in eccesso)": (
+        "Residual income (rendimenti in eccesso)", "Residual income (excess returns)"),
+    "P/B giustificato dalla redditivita'": (
+        "P/B giustificato dalla redditivita'", "Justified price / book"),
 }
+
+#: Serie storiche mostrate nei riquadri affiancati, per profilo di settore.
+#: Su una banca ROIC e Owner Earnings non esistono: mostrarli come "n/d" sarebbe
+#: rumore, quindi il grafico sceglie le metriche che quel profilo calcola davvero.
+HISTORY_METRICS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
+    "industrial": (
+        ("roic", "axis_roic", "%"),
+        ("operating_margin", "metric_operating_margin", "%"),
+        ("owner_earnings", "axis_owner_earnings", "abs"),
+        ("net_margin", "metric_net_margin", "%"),
+        ("debt_to_equity", "metric_debt_equity", "x"),
+        ("interest_coverage", "metric_interest_coverage", "x"),
+    ),
+    "bank": (
+        ("rotce", "metric_rotce", "%"),
+        ("efficiency_ratio", "metric_efficiency", "%"),
+        ("tangible_book_per_share", "metric_tbvps", "ratio"),
+        ("net_interest_margin", "metric_nim", "%"),
+        ("cost_of_risk", "metric_cost_of_risk", "%"),
+        ("loan_to_deposit", "metric_loan_deposit", "x"),
+    ),
+    "insurance": (
+        ("combined_ratio", "metric_combined_ratio", "%"),
+        ("roe", "metric_roe", "%"),
+        ("book_value_per_share", "metric_bvps", "ratio"),
+        ("investment_yield", "metric_investment_yield", "%"),
+        ("premiums_earned", "metric_premiums", "abs"),
+        ("equity_to_assets", "equity_to_assets", "%"),
+    ),
+}
+
+
+def history_metrics(quality: Mapping[str, Any], limit: int = 6) -> Tuple[Tuple[str, str, str], ...]:
+    """Metriche da mostrare nei riquadri storici, scelte in base al profilo di settore."""
+    sector = quality.get("sector") or "industrial"
+    available = quality.get("metrics") or {}
+    chosen = [
+        spec for spec in HISTORY_METRICS.get(sector, HISTORY_METRICS["industrial"])
+        if spec[0] in available
+    ]
+    return tuple(chosen[:limit])
+
+
+#: Etichette brevi per gli assi del radar, per chiave di componente. Il radar prende le
+#: componenti dal profilo di settore in uso, quindi funziona anche su banche e
+#: assicurazioni senza sapere in anticipo quali metriche esistano.
+RADAR_LABELS: Dict[str, Tuple[str, str]] = {
+    # comuni
+    "roe": ("ROE", "ROE"),
+    "roa": ("ROA", "ROA"),
+    "rotce": ("ROTCE", "ROTCE"),
+    "profitable_years": ("Anni in utile", "Profitable years"),
+    "equity_to_assets": ("Patrimonio/attivo", "Equity/assets"),
+    "debt_to_equity": ("Debito", "Debt"),
+    # industriali
+    "roic": ("ROIC", "ROIC"),
+    "operating_margin": ("Margine oper.", "Operating margin"),
+    "net_margin": ("Margine netto", "Net margin"),
+    "owner_earnings_margin": ("Owner Earnings", "Owner Earnings"),
+    "roic_stability": ("Stabilita' ROIC", "ROIC stability"),
+    "margin_stability": ("Stabilita' margini", "Margin stability"),
+    "revenue_growth_years": ("Crescita ricavi", "Revenue growth"),
+    "owner_earnings_growth_years": ("Crescita OE", "OE growth"),
+    "debt_to_ebitda": ("Debito/EBITDA", "Debt/EBITDA"),
+    "interest_coverage": ("Copertura interessi", "Interest coverage"),
+    "current_ratio": ("Liquidita'", "Liquidity"),
+    # banche
+    "efficiency_ratio": ("Cost/Income", "Cost/Income"),
+    "net_interest_margin": ("Margine interesse", "Net interest margin"),
+    "rotce_stability": ("Stabilita' ROTCE", "ROTCE stability"),
+    "tbvps_growth_years": ("Crescita patrimonio", "Book value growth"),
+    "fee_income_share": ("Commissioni", "Fee income"),
+    "loan_to_deposit": ("Impieghi/depositi", "Loans/deposits"),
+    "cost_of_risk": ("Costo del credito", "Cost of risk"),
+    # assicurazioni
+    "combined_ratio": ("Combined ratio", "Combined ratio"),
+    "combined_ratio_stability": ("Stabilita' tecnica", "Underwriting stability"),
+    "investment_yield": ("Rendimento invest.", "Investment yield"),
+    "bvps_growth_years": ("Crescita patrimonio", "Book value growth"),
+    "roe_stability": ("Stabilita' ROE", "ROE stability"),
+}
+
 
 _LANGUAGE = "en"
 
@@ -207,6 +306,43 @@ def _t(key: str, **fields: Any) -> str:
     italian, english = STRINGS.get(key, (key, key))
     text = italian if _LANGUAGE == "it" else english
     return text.format(**fields) if fields else text
+
+
+def _radar_label(key: str, fallback: str) -> str:
+    """Etichetta breve per un asse del radar, con ripiego sul nome del profilo."""
+    pair = RADAR_LABELS.get(key)
+    if pair:
+        return pair[0] if _LANGUAGE == "it" else pair[1]
+    short = str(fallback).replace(" medio", "").replace(" (%)", "").strip()
+    return short if len(short) <= 24 else short[:22] + "..."
+
+
+def _radar_axes(
+    result: Mapping[str, Any], limit: int = 8
+) -> List[Tuple[str, float]]:
+    """Assi del radar presi dalle componenti effettivamente presenti nel risultato.
+
+    Le componenti vengono alternate fra le tre categorie e ordinate per peso, cosi'
+    che il radar resti bilanciato invece di mostrare sei assi di redditivita' e due
+    di solidita'.
+    """
+    groups: List[List[Tuple[str, Mapping[str, Any]]]] = []
+    for category in (result.get("category_scores") or {}).values():
+        components = (category.get("components") or {}).items()
+        usable = [(k, c) for k, c in components if c.get("score") is not None]
+        usable.sort(key=lambda item: item[1].get("weight", 0), reverse=True)
+        groups.append(usable)
+
+    axes: List[Tuple[str, float]] = []
+    position = 0
+    while len(axes) < limit and any(position < len(group) for group in groups):
+        for group in groups:
+            if position < len(group) and len(axes) < limit:
+                key, component = group[position]
+                axes.append((_radar_label(key, component.get("label", key)),
+                             float(component["score"])))
+        position += 1
+    return axes
 
 
 def _label(raw: Any) -> str:
@@ -617,48 +753,46 @@ def plot_quality_radar(
             save_figure(figure, save)
         return figure
 
-    axes_labels = [
-        (_t("axis_roic"), ("profitability", "roic")),
-        (_t("axis_margins"), ("profitability", "operating_margin")),
-        (_t("axis_owner_earnings"), ("profitability", "owner_earnings_margin")),
-        (_t("axis_roic_stability"), ("consistency", "roic_stability")),
-        (_t("axis_revenue_growth"), ("consistency", "revenue_growth_years")),
-        (_t("axis_debt"), ("balance_sheet", "debt_to_equity")),
-        (_t("axis_interest_cover"), ("balance_sheet", "interest_coverage")),
-        (_t("axis_liquidity"), ("balance_sheet", "current_ratio")),
-    ]
-    angles = [n / len(axes_labels) * 2 * math.pi for n in range(len(axes_labels))]
+    series: List[Tuple[str, List[Tuple[str, float]]]] = []
+    for result in results:
+        axes_values = _radar_axes(result)
+        if axes_values:
+            series.append((result.get("ticker", "?"), axes_values))
+    if not series:
+        _annotate_missing(ax, _t("no_quality"))
+        if save:
+            save_figure(figure, save)
+        return figure
+
+    # Gli assi sono quelli del primo titolo: confrontare profili di settore diversi
+    # sullo stesso radar non avrebbe senso, e il grafico lo rende evidente.
+    axis_names = [name for name, _ in series[0][1]]
+    angles = [n / len(axis_names) * 2 * math.pi for n in range(len(axis_names))]
     angles += angles[:1]
 
-    for index, result in enumerate(results):
-        categories = result.get("category_scores") or {}
-        values: List[float] = []
-        for _, (category, component) in axes_labels:
-            score = (
-                ((categories.get(category) or {}).get("components") or {})
-                .get(component, {})
-                .get("score")
-            )
-            values.append(float(score) if score is not None else 0.0)
+    for index, (ticker, axes_values) in enumerate(series):
+        lookup = dict(axes_values)
+        values = [lookup.get(name, 0.0) for name in axis_names]
         values += values[:1]
         color = PALETTE["series"][index]
-        label = result.get("ticker", f"serie {index + 1}")
-        ax.plot(angles, values, color=color, linewidth=2.0, label=label, zorder=3)
+        ax.plot(angles, values, color=color, linewidth=2.0, label=ticker, zorder=3)
         ax.fill(angles, values, color=color, alpha=0.16, zorder=2)
 
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels([label for label, _ in axes_labels], fontsize=8.5,
-                       color=PALETTE["ink_secondary"])
+    ax.set_xticklabels(axis_names, fontsize=8.5, color=PALETTE["ink_secondary"])
     ax.set_ylim(0, 100)
     ax.set_yticks([25, 50, 75, 100])
     ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7.5, color=PALETTE["muted"])
     ax.set_facecolor(PALETTE["surface"])
     ax.spines["polar"].set_color(PALETTE["axis"])
     ax.grid(color=PALETTE["grid"], linewidth=0.6)
+    sector_label = results[0].get("sector_label")
     title = (
         f"{_t('quality_profile')} · {results[0].get('ticker')}"
         if len(results) == 1 else _t("quality_profile_compare")
     )
+    if sector_label and len(results) == 1:
+        title += f"  ({sector_label})"
     ax.set_title(title, pad=22, color=PALETTE["ink"])
     if len(results) > 1:
         ax.legend(loc="upper right", bbox_to_anchor=(1.22, 1.12))
@@ -676,14 +810,7 @@ def plot_quality_radar(
 def plot_metrics_history(
     quality: Mapping[str, Any],
     *,
-    metrics: Sequence[Tuple[str, str, str]] = (
-        ("roic", "axis_roic", "%"),
-        ("operating_margin", "metric_operating_margin", "%"),
-        ("net_margin", "metric_net_margin", "%"),
-        ("owner_earnings", "axis_owner_earnings", "abs"),
-        ("debt_to_equity", "metric_debt_equity", "x"),
-        ("interest_coverage", "metric_interest_coverage", "x"),
-    ),
+    metrics: Optional[Sequence[Tuple[str, str, str]]] = None,
     axes: Optional[Sequence[Any]] = None,
     save: Optional[str] = None,
 ) -> Any:
@@ -694,6 +821,11 @@ def plot_metrics_history(
     """
     _require_matplotlib()
     apply_style()
+
+    if metrics is None:
+        metrics = history_metrics(quality)
+    if not metrics:
+        metrics = (("roic", "axis_roic", "%"),)
 
     data = quality.get("metrics") or {}
     years = sorted(quality.get("years_analyzed") or [])
@@ -1115,13 +1247,8 @@ def create_tearsheet(
     # Riga 3: storico delle metriche
     if quality:
         history_axes = [figure.add_subplot(grid[2, column]) for column in range(3)]
-        plot_metrics_history(
-            quality,
-            metrics=(("roic", "axis_roic", "%"),
-                     ("operating_margin", "metric_operating_margin", "%"),
-                     ("owner_earnings", "axis_owner_earnings", "abs")),
-            axes=history_axes,
-        )
+        plot_metrics_history(quality, metrics=history_metrics(quality, limit=3),
+                             axes=history_axes)
 
     # Riga 4: backtest
     if backtest:
