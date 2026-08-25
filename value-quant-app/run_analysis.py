@@ -12,6 +12,7 @@ Esempi::
     python run_analysis.py AAPL --lang it    # etichette dei grafici in italiano
     python run_analysis.py JPM               # profilo bancario riconosciuto da solo
     python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
+    python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
 
 Ogni esecuzione produce: i report testuali a schermo, i grafici in PNG nella cartella
 di output e, con ``--json``, il dizionario completo dei risultati.
@@ -40,8 +41,10 @@ from models.quality_score import (  # noqa: E402
     format_report,
 )
 from models.valuation import (  # noqa: E402
+    buffett_scorecard,
     calculate_valuation,
     fetch_market_data,
+    format_buffett_scorecard,
     format_valuation_report,
 )
 
@@ -63,6 +66,7 @@ def analyze_ticker(
     growth_override: Optional[float] = None,
     wacc_override: Optional[float] = None,
     sector: Optional[str] = None,
+    mode: str = "standard",
 ) -> Dict[str, Any]:
     """Qualita' + valutazione di un titolo, con un solo download dei bilanci.
 
@@ -71,19 +75,24 @@ def analyze_ticker(
     con ``sector`` quando il riconoscimento automatico sbaglia.
     """
     financials = fetch_financials(ticker, years=years)
-    quality = calculate_quality_score(ticker, years=years, financials=financials, sector=sector)
+    quality = calculate_quality_score(
+        ticker, years=years, financials=financials, sector=sector, mode=mode
+    )
     market_data = fetch_market_data(ticker)
     valuation = calculate_valuation(
         ticker, financials=financials, market_data=market_data,
         growth_override=growth_override, wacc_override=wacc_override, years=years,
-        sector=sector,
+        sector=sector, mode=mode,
     )
-    return {
+    analysis = {
         "ticker": ticker.upper(),
         "quality": quality,
         "valuation": valuation,
         "financials": financials,
     }
+    if str(mode).lower() == "buffett":
+        analysis["scorecard"] = buffett_scorecard(quality, valuation)
+    return analysis
 
 
 def _universe_row(analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -227,7 +236,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
     options: Dict[str, Any] = {
         "tickers": [], "out": "output", "backtest": False, "charts": True,
         "show": False, "json": False, "demo": False, "years": 10,
-        "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None,
+        "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None, "mode": "standard",
     }
     index = 0
     while index < len(argv):
@@ -252,6 +261,8 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["show"] = True; index += 1
         elif argument == "--json":
             options["json"] = True; index += 1
+        elif argument == "--buffett":
+            options["mode"] = "buffett"; index += 1
         elif argument == "--sector" and index + 1 < len(argv):
             options["sector"] = argv[index + 1]; index += 2
         elif argument == "--lang" and index + 1 < len(argv):
@@ -291,13 +302,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         analysis = analyze_ticker(
             ticker, years=options["years"],
             growth_override=options["growth"], wacc_override=options["wacc"],
-            sector=options["sector"],
+            sector=options["sector"], mode=options["mode"],
         )
         analyses.append(analysis)
         print(format_report(analysis["quality"]))
         print()
         print(format_valuation_report(analysis["valuation"]))
         print()
+        if analysis.get("scorecard"):
+            print(format_buffett_scorecard(analysis["scorecard"]))
+            print()
 
     rows = [_universe_row(analysis) for analysis in analyses]
     if len(rows) > 1:

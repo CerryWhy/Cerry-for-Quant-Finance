@@ -73,12 +73,15 @@ except ImportError:  # esecuzione come script standalone
 
 __all__ = [
     "BANK",
+    "BUFFETT",
+    "BUFFETT_PROFILE",
     "INDUSTRIAL",
     "INSURANCE",
     "PROFILES",
     "build_metrics",
     "detect_sector",
     "extract_sector_fundamentals",
+    "resolve_profile",
     "score_categories",
 ]
 
@@ -736,3 +739,122 @@ def score_categories(
             "components": components,
         }
     return categories
+
+
+#: Variante del profilo industriale che segue i criteri pubblicati da Buffett negli
+#: annual report di Berkshire (dal 1982) e la metrica della lettera 2007.
+#:
+#: Tre differenze rispetto al profilo industriale standard:
+#:
+#: 1. la metrica principale e' il **rendimento ante imposte sul capitale tangibile**
+#:    ("return on unleveraged net tangible assets"), non il ROIC ordinario;
+#: 2. al posto del Debt/EBITDA c'e' **Debito / Owner Earnings** — gli anni necessari a
+#:    ripagare il debito con la cassa che il proprietario potrebbe estrarre. Buffett
+#:    rifiuta apertamente l'EBITDA: "il management pensa che la fatina dei denti paghi
+#:    il CapEx?" (lettera 2000);
+#: 3. le soglie su debito e continuita' degli utili sono **piu' severe**: il criterio
+#:    pubblicato dice "buoni rendimenti sul capitale proprio con poco o nessun debito"
+#:    e "capacita' di reddito dimostrata", non "accettabile".
+BUFFETT_PROFILE: Dict[str, Any] = {
+    "label": "Azienda operativa (criteri Buffett)",
+    "categories": {
+        "profitability": {
+            "label": "Economics del business",
+            "components": {
+                "return_on_tangible_capital": {
+                    "label": "Rendimento ante imposte su capitale tangibile (%)",
+                    "source": ("average", "return_on_tangible_capital"),
+                    "low": 20.0, "high": 100.0, "weight": 0.40},
+                "roe": {"label": "ROE medio (%)", "source": ("average", "roe"),
+                        "low": 8.0, "high": 25.0, "weight": 0.25},
+                "roic": {"label": "ROIC medio (%)", "source": ("average", "roic"),
+                         "low": 4.0, "high": 25.0, "weight": 0.20},
+                "owner_earnings_margin": {
+                    "label": "Owner Earnings / Ricavi medio (%)",
+                    "source": ("average", "owner_earnings_margin"),
+                    "low": 3.0, "high": 20.0, "weight": 0.15},
+            },
+        },
+        "consistency": {
+            "label": "Capacita' di reddito dimostrata",
+            "components": {
+                # "Demonstrated consistent earning power": e' il criterio numero uno,
+                # e chiede continuita', non media.
+                "profitable_years": {"label": "Anni con utile positivo (%)",
+                                     "source": ("consistency", "net_income", "positive_years_pct"),
+                                     "low": 80.0, "high": 100.0, "weight": 0.30},
+                "owner_earnings_growth_years": {
+                    "label": "Anni di crescita degli Owner Earnings (%)",
+                    "source": ("consistency", "owner_earnings", "growth_years_pct"),
+                    "low": 50.0, "high": 100.0, "weight": 0.25},
+                "tangible_return_stability": {
+                    "label": "Coeff. di variazione del rendimento tangibile",
+                    "source": ("consistency", "return_on_tangible_capital",
+                               "coefficient_of_variation"),
+                    "low": 0.50, "high": 0.05, "weight": 0.25},
+                "revenue_growth_years": {"label": "Anni di crescita dei ricavi (%)",
+                                         "source": ("consistency", "revenue", "growth_years_pct"),
+                                         "low": 50.0, "high": 100.0, "weight": 0.20},
+            },
+        },
+        "balance_sheet": {
+            "label": "Poco o nessun debito",
+            "components": {
+                # Anni di Owner Earnings necessari a estinguere il debito: e' la domanda
+                # che conta davvero, ed e' insensibile ai trucchi contabili dell'EBITDA.
+                "debt_to_owner_earnings": {
+                    "label": "Anni di Owner Earnings per ripagare il debito",
+                    "source": ("average", "debt_to_owner_earnings"),
+                    "low": 5.0, "high": 0.0, "weight": 0.40},
+                "debt_to_equity": {"label": "Debt/Equity medio",
+                                   "source": ("average", "debt_to_equity"),
+                                   "low": 1.00, "high": 0.00, "weight": 0.35},
+                "interest_coverage": {"label": "Interest Coverage medio",
+                                      "source": ("average", "interest_coverage"),
+                                      "low": 5.0, "high": 20.0, "weight": 0.25},
+            },
+        },
+    },
+}
+
+BUFFETT = "buffett"
+PROFILES[BUFFETT] = BUFFETT_PROFILE
+
+CONSISTENCY_TARGETS[BUFFETT] = (
+    "return_on_tangible_capital", "roic", "roe", "owner_earnings_margin",
+    "revenue", "net_income", "owner_earnings",
+)
+AVERAGE_TARGETS[BUFFETT] = (
+    "return_on_tangible_capital", "roic", "roe", "roa", "owner_earnings",
+    "owner_earnings_margin", "debt_to_equity", "debt_to_owner_earnings",
+    "interest_coverage", "maintenance_capex",
+)
+TABLE_ROWS[BUFFETT] = (
+    ("Ricavi", "revenue", "big"),
+    ("Utile netto", "net_income", "big"),
+    ("Owner Earnings", "owner_earnings", "big"),
+    ("CapEx totale", "capex", "big"),
+    ("CapEx di mantenimento", "maintenance_capex", "big"),
+    ("Rend. capitale tangibile %", "return_on_tangible_capital", "pct"),
+    ("ROIC %", "roic", "pct"),
+    ("ROE %", "roe", "pct"),
+    ("Owner Earn. / Ricavi %", "owner_earnings_margin", "pct"),
+    ("Debt / Equity", "debt_to_equity", "ratio"),
+    ("Anni per ripagare il debito", "debt_to_owner_earnings", "ratio"),
+    ("Interest Coverage", "interest_coverage", "ratio"),
+)
+
+
+def resolve_profile(sector: str, mode: str = "standard") -> Tuple[Dict[str, Any], str]:
+    """Profilo effettivo e sua chiave, dato il settore e la modalita' di analisi.
+
+    La modalita' ``"buffett"`` si applica solo alle aziende operative: i criteri
+    pubblicati di Berkshire parlano di business industriali e commerciali, e su una
+    banca non avrebbero senso (il "poco o nessun debito" e' incompatibile con il
+    modello di business bancario). Su un finanziario la modalita' viene ignorata e
+    resta il profilo di settore.
+    """
+    if str(mode).lower() == BUFFETT and sector == INDUSTRIAL:
+        return PROFILES[BUFFETT], BUFFETT
+    return PROFILES[sector], sector
+

@@ -9,13 +9,14 @@ e soprattutto **come si leggono i numeri che produce**.
 
 1. [L'impianto: quattro domande, quattro moduli](#1-limpianto)
 2. [Modulo 0 — Profili di settore](#15-profili-di-settore)
-3. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
-4. [Modulo 2 — Valuation](#3-modulo-2--valuation)
-5. [Modulo 3 — Backtest](#4-modulo-3--backtest)
-6. [Modulo 4 — Visualize](#5-modulo-4--visualize)
-7. [Come si usano insieme](#6-come-si-usano-insieme)
-8. [Glossario](#7-glossario)
-9. [Limiti e avvertenze](#8-limiti-e-avvertenze)
+3. [Modalità Buffett](#buffett-mode)
+4. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
+5. [Modulo 2 — Valuation](#3-modulo-2--valuation)
+6. [Modulo 3 — Backtest](#4-modulo-3--backtest)
+7. [Modulo 4 — Visualize](#5-modulo-4--visualize)
+8. [Come si usano insieme](#6-come-si-usano-insieme)
+9. [Glossario](#7-glossario)
+10. [Limiti e avvertenze](#8-limiti-e-avvertenze)
 
 ---
 
@@ -203,6 +204,160 @@ su attivo come proxy di leva, costo del credito, loan-to-deposit — e **scrive 
 `data_quality.missing` che i ratios veri non ci sono**.
 
 Un proxy segnalato è onesto; un proxy spacciato per il ratio vero no.
+
+---
+
+
+<a name="buffett-mode"></a>
+## 1-ter. Modalità Buffett
+
+**Attivazione**: `--buffett` da riga di comando, `mode="buffett"` da codice.
+
+Il modello standard è *ispirato* ai principi di Buffett. Questa modalità li applica
+**alla lettera**, ricostruiti dalle fonti primarie: i criteri di acquisizione stampati in
+ogni annual report dal 1982, l'appendice alla lettera del 1986, la lettera del 2007 e la
+risposta sul tasso di sconto all'assemblea del 1998.
+
+### 1. Il CapEx di mantenimento, stimato invece che approssimato
+
+La definizione del 1986 recita: Owner Earnings = utile riportato **+** ammortamenti e
+altre poste non monetarie **−** *la media annua degli investimenti capitalizzati che
+l'azienda richiede per mantenere pienamente la propria posizione competitiva e il proprio
+volume*.
+
+Quella cifra non compare in nessun bilancio. Il modello standard usava il **CapEx totale**
+come proxy — prudenziale, perché sottrae anche gli investimenti di crescita, comprimendo
+gli Owner Earnings di un'azienda in espansione.
+
+La modalità Buffett la stima col metodo di **Bruce Greenwald** (Columbia), lo standard
+della letteratura value:
+
+```
+immobilizzazioni/ricavi = media storica di (immobilizzazioni nette / ricavi)
+CapEx di crescita       = immobilizzazioni/ricavi × incremento dei ricavi
+CapEx di mantenimento   = CapEx totale − CapEx di crescita
+```
+
+L'intuizione: se servono 40 centesimi di impianti per ogni euro di ricavo, crescere di 100
+di ricavi richiede 40 di investimento *aggiuntivo*; il resto serviva a stare fermi. Quando
+i ricavi calano il CapEx di crescita è zero e tutto il CapEx è di mantenimento.
+
+Ripieghi, in ordine: mancano le immobilizzazioni → si usano gli **ammortamenti**; manca
+anche quello → **CapEx totale**, la stima più prudente. Ogni ripiego è annotato.
+
+### 2. Il rendimento sul capitale tangibile
+
+Nella lettera del 2007 Buffett misura le aziende sul *"return on unleveraged net tangible
+assets"*, e cita See's Candies **oltre il 200% ante imposte**. La differenza dal ROIC
+ordinario è il denominatore:
+
+```
+Capitale tangibile = Debito + Patrimonio Netto − Cassa − Avviamento − Immateriali
+Rendimento = EBIT / Capitale tangibile      (ante imposte, come lo cita lui)
+```
+
+**Perché toglie l'avviamento**: quello è il prezzo pagato in passato per delle
+acquisizioni, non il capitale che il business richiede *oggi* per funzionare. Un ROIC che
+lo include dice quanto è stato bravo chi ha comprato; questo dice quanto è buono il
+business in sé. Su un'azienda cresciuta per acquisizioni i due numeri divergono
+moltissimo.
+
+### 3. Debito / Owner Earnings al posto del Debt/EBITDA
+
+Nella lettera del 2000: *"I riferimenti all'EBITDA ci fanno rabbrividire — il management
+pensa che la fatina dei denti paghi il CapEx?"*. Nel 2002 rincara: *"Ogni centesimo di
+ammortamento che riportiamo è un costo reale"*.
+
+Il profilo Buffett sostituisce quindi il Debt/EBITDA con **gli anni di Owner Earnings
+necessari a estinguere il debito**. È la domanda che conta davvero — *quanto ci metterei a
+liberarmene con la cassa che il business produce* — ed è insensibile alle poste non
+monetarie che rendono l'EBITDA poco affidabile.
+
+### 4. Il tasso di sconto, e perché non basta abbassarlo
+
+All'assemblea del 1998: *"Non scontiamo i flussi futuri al 9% o 10%: usiamo il tasso del
+Treasury. Cerchiamo di occuparci di cose di cui siamo abbastanza certi. **Non si compensa
+il rischio usando un tasso di sconto più alto.**"*
+
+È la divergenza più grande dal modello standard, che usa un WACC da CAPM con il beta —
+una costruzione che Buffett rifiuta esplicitamente (per lui la volatilità non è rischio;
+il rischio è la perdita permanente di capitale).
+
+**Ma il tasso basso da solo è una trappola.** Scontare al 4% invece che al 9% può alzare
+un fair value del 50-80%; su un business imprevedibile produce numeri privi di senso. Il
+tasso basso funziona per Buffett perché è il *complemento di una selezione preventiva
+severissima*, non un'ipotesi generosa presa da sola.
+
+Il modello lo riproduce con **tre presidi che agiscono insieme**:
+
+**a) Il filtro di prevedibilità.** Il criterio #1 pubblicato — *"demonstrated consistent
+earning power; future projections are of no interest to us, nor are turnaround
+situations"* — diventa un test con quattro requisiti:
+
+| Requisito | Soglia |
+|---|---|
+| Storico disponibile | ≥ 4 esercizi |
+| Utile netto positivo | in **ogni** esercizio |
+| Owner Earnings positivi | in **ogni** esercizio |
+| Coefficiente di variazione degli Owner Earnings | ≤ 0.50 |
+
+Se l'azienda non li supera tutti, **il tasso del Treasury non viene applicato**: il
+modello resta al WACC e lo dichiara. È il comportamento fedele — Buffett non alza il tasso
+per compensare il rischio, semplicemente non compra.
+
+**b) Le ipotesi vanno come blocco.** Insieme al tasso cambiano: crescita terminale
+**zero** (nessuna crescita perpetua regalata), tetto alla crescita esplicita al **10%**,
+normalizzazione su **5 anni** ("media annua", non l'ultimo esercizio).
+
+**c) Il margine di sicurezza sale al 50%.** Il tasso basso alza il fair value; il margine
+doppio riporta il prezzo d'acquisto a livelli sensati. Nei test su bilanci sintetici il
+fair value passa da ~113 a ~246, ma il prezzo d'acquisto obiettivo resta sotto 123 — cioè
+circa 20 volte gli Owner Earnings, che è un multiplo d'ingresso plausibile per un
+compounder di qualità.
+
+### 5. Owner Earnings yield contro il titolo di Stato
+
+*"Usiamo il tasso risk free semplicemente per equiparare una cosa all'altra... possiamo
+sempre comprare titoli di Stato."*
+
+Il modello stampa quindi il rendimento degli Owner Earnings sul prezzo, il rendimento del
+titolo di Stato e la differenza. È il confronto che Buffett fa davvero, ed è più diretto
+di qualunque fair value: se un'azienda rende meno di un titolo di Stato, tutto il premio
+che stai pagando è scommessa sulla crescita futura.
+
+### 6. La scorecard, e cosa dichiara di non poter misurare
+
+La checklist riproduce i criteri di acquisizione pubblicati, con soglie esplicite:
+
+| Criterio | Misura | Soglia |
+|---|---|---|
+| Capacità di reddito dimostrata | anni con utile positivo | 100% |
+| Owner Earnings in crescita | anni di crescita | ≥ 60% |
+| Buon rendimento sul capitale proprio | ROE medio | ≥ 15% |
+| Economics del business | rendimento su capitale tangibile | ≥ 25% |
+| Poco o nessun debito | Debt/Equity | ≤ 0.50 |
+| Debito ripagabile | anni di Owner Earnings | ≤ 3 |
+| Margine di sicurezza | sconto sul fair value | ≥ 50% |
+
+Tre criteri di Buffett **non sono verificabili da un bilancio** e compaiono marcati come
+giudizio manuale invece di essere omessi: business comprensibile (*"se c'è molta
+tecnologia, non lo capiamo"*), management già al suo posto (*"non possiamo fornirlo noi"*),
+cerchio di competenza. Un modello che li tace lascia credere che la checklist sia completa.
+
+### Dove il modello resta inevitabilmente diverso
+
+**Buffett non assegna punteggi.** I suoi criteri sono filtri passa/non passa su poche cose;
+questo è un sistema di ranking. Sono strumenti per scopi diversi: lui sceglie cinque
+aziende in un decennio, un modello quantitativo ordina un universo.
+
+**E c'è una tensione irriducibile**: lui dice *"le proiezioni future non ci interessano
+affatto"*, ma un DCF **è** una proiezione. Lui la risolve comprando solo business il cui
+futuro è altamente prevedibile — che è esattamente ciò che il filtro di prevedibilità
+cerca di imitare. Ma resta un'imitazione.
+
+Per questo il **reverse DCF** è lo strumento più fedele di tutto il modello: non proietta
+niente, misura solo cosa il mercato sta già scontando. È l'unico che rispetta davvero il
+*"no projections"*.
 
 ---
 

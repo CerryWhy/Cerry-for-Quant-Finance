@@ -52,6 +52,8 @@ except ImportError:  # pragma: no cover
 try:  # import come package (backend.models.valuation)
     from .quality_score import (
         DEFAULT_TAX_RATE,
+        calculate_consistency,
+        estimate_maintenance_capex,
         _DataQuality,
         _fmt,
         _fmt_big,
@@ -66,6 +68,8 @@ try:  # import come package (backend.models.valuation)
 except ImportError:  # import come script standalone
     from quality_score import (  # type: ignore[no-redef]
         DEFAULT_TAX_RATE,
+        calculate_consistency,
+        estimate_maintenance_capex,
         _DataQuality,
         _fmt,
         _fmt_big,
@@ -81,11 +85,15 @@ except ImportError:  # import come script standalone
 
 __all__ = [
     "DEFAULT_ASSUMPTIONS",
+    "BUFFETT_ASSUMPTIONS",
+    "assess_predictability",
+    "buffett_scorecard",
     "calculate_valuation",
     "cost_of_capital",
     "dcf_value_per_share",
     "epv_value_per_share",
     "fetch_market_data",
+    "format_buffett_scorecard",
     "format_valuation_report",
     "graham_number",
     "growth_path",
@@ -1205,6 +1213,187 @@ def _financial_valuation(
     return result
 
 
+#: Ipotesi che cambiano in modalita' buffett. Vanno insieme: applicarne una sola
+#: produce numeri fuorvianti (vedi :func:`assess_predictability`).
+BUFFETT_ASSUMPTIONS: Dict[str, Any] = {
+    "terminal_growth": 0.000,          # nessuna crescita perpetua regalata
+    "target_margin_of_safety": 0.50,   # margine molto piu' ampio, non 30%
+    "max_growth": 0.100,               # tetto alla crescita esplicita ancora piu' basso
+    "normalization": "median5",        # "media annua", non l'ultimo anno
+}
+
+
+def assess_predictability(
+    owner_earnings: Mapping[int, Optional[float]],
+    net_income: Mapping[int, Optional[float]],
+    quality: Optional[_DataQuality] = None,
+) -> Dict[str, Any]:
+    """Criterio numero uno di Buffett: **capacita' di reddito dimostrata**.
+
+    Dai criteri di acquisizione pubblicati in ogni annual report dal 1982:
+    *"demonstrated consistent earning power — future projections are of no interest to
+    us, nor are turnaround situations"*.
+
+    Serve a decidere se si puo' scontare al tasso del Treasury. Alla domanda su come
+    tenessero conto del rischio, Buffett rispose (assemblea 1998): *"non scontiamo i
+    flussi al 9 o 10%, usiamo il tasso del Treasury... non si compensa il rischio con un
+    tasso di sconto piu' alto"*. La contropartita e' che lui **compra solo cio' di cui
+    e' abbastanza certo**: il tasso basso non e' generosita', e' il complemento di una
+    selezione preventiva severissima.
+
+    Applicare un tasso del 4% a un business imprevedibile e' quindi il modo piu' rapido
+    di travisarlo. Questa funzione e' il filtro che impedisce di farlo.
+
+    Returns:
+        ``passes`` (bool) e ``reasons`` con l'esito dei singoli requisiti.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    oe_stats = calculate_consistency(owner_earnings)
+    income_stats = calculate_consistency(net_income)
+
+    years = int(oe_stats.get("n") or 0)
+    positive_income = income_stats.get("positive_years_pct")
+    positive_oe = oe_stats.get("positive_years_pct")
+    variation = oe_stats.get("coefficient_of_variation")
+
+    requirements = {
+        "storico_sufficiente": {
+            "label": "Almeno 4 esercizi disponibili",
+            "value": float(years),
+            "passes": years >= 4,
+        },
+        "utili_sempre_positivi": {
+            "label": "Utile netto positivo in ogni esercizio",
+            "value": positive_income,
+            "passes": positive_income is not None and positive_income >= 100.0,
+        },
+        "owner_earnings_positivi": {
+            "label": "Owner Earnings positivi in ogni esercizio",
+            "value": positive_oe,
+            "passes": positive_oe is not None and positive_oe >= 100.0,
+        },
+        "owner_earnings_stabili": {
+            "label": "Coefficiente di variazione degli Owner Earnings sotto 0.50",
+            "value": variation,
+            "passes": variation is not None and variation <= 0.50,
+        },
+    }
+    passes = all(item["passes"] for item in requirements.values())
+    failed = [item["label"] for item in requirements.values() if not item["passes"]]
+
+    if not passes:
+        quality.note(
+            "Criterio Buffett #1 non soddisfatto (capacita' di reddito dimostrata): "
+            + "; ".join(failed)
+        )
+    return {"passes": passes, "requirements": requirements, "failed": failed}
+
+
+def buffett_scorecard(
+    quality_result: Mapping[str, Any],
+    valuation_result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Checklist sui criteri di acquisizione pubblicati da Berkshire dal 1982.
+
+    Tre dei criteri di Buffett — business comprensibile, management gia' al suo posto,
+    dimensione minima per un'acquisizione — **non sono misurabili da un bilancio**.
+    Compaiono nella scorecard marcati come giudizio manuale invece di essere ignorati:
+    un modello che li omette in silenzio lascia credere che la checklist sia completa.
+    """
+    metrics = quality_result.get("metrics") or {}
+    averages = quality_result.get("averages") or {}
+    consistency = quality_result.get("consistency") or {}
+    categories = quality_result.get("category_scores") or {}
+
+    def average(name: str) -> Optional[float]:
+        return averages.get(name)
+
+    positive_years = (consistency.get("net_income") or {}).get("positive_years_pct")
+    oe_growth_years = (consistency.get("owner_earnings") or {}).get("growth_years_pct")
+    margin = valuation_result.get("margin_of_safety")
+    target = float((valuation_result.get("assumptions") or {}).get(
+        "target_margin_of_safety", 0.30
+    ))
+
+    checks: Dict[str, Dict[str, Any]] = {
+        "consistent_earning_power": {
+            "criterio": "Capacita' di reddito dimostrata",
+            "misura": "Anni con utile positivo (%)",
+            "valore": _round(positive_years, 1),
+            "soglia": "100%",
+            "esito": positive_years is not None and positive_years >= 100.0,
+        },
+        "owner_earnings_growth": {
+            "criterio": "Owner Earnings in crescita",
+            "misura": "Anni di crescita degli Owner Earnings (%)",
+            "valore": _round(oe_growth_years, 1),
+            "soglia": ">= 60%",
+            "esito": oe_growth_years is not None and oe_growth_years >= 60.0,
+        },
+        "return_on_equity": {
+            "criterio": "Buon rendimento sul capitale proprio",
+            "misura": "ROE medio (%)",
+            "valore": _round(average("roe"), 1),
+            "soglia": ">= 15%",
+            "esito": (average("roe") or 0) >= 15.0,
+        },
+        "return_on_tangible_capital": {
+            "criterio": "Economics del business (lettera 2007)",
+            "misura": "Rendimento ante imposte su capitale tangibile (%)",
+            "valore": _round(average("return_on_tangible_capital"), 1),
+            "soglia": ">= 25%",
+            "esito": (average("return_on_tangible_capital") or 0) >= 25.0,
+        },
+        "little_or_no_debt": {
+            "criterio": "Poco o nessun debito",
+            "misura": "Debt / Equity medio",
+            "valore": _round(average("debt_to_equity"), 2),
+            "soglia": "<= 0.50",
+            "esito": average("debt_to_equity") is not None and average("debt_to_equity") <= 0.50,
+        },
+        "debt_repayable": {
+            "criterio": "Debito ripagabile con la cassa del proprietario",
+            "misura": "Anni di Owner Earnings per estinguere il debito",
+            "valore": _round(average("debt_to_owner_earnings"), 2),
+            "soglia": "<= 3 anni",
+            "esito": (
+                average("debt_to_owner_earnings") is not None
+                and average("debt_to_owner_earnings") <= 3.0
+            ),
+        },
+        "margin_of_safety": {
+            "criterio": "Margine di sicurezza sul prezzo",
+            "misura": "Margine di sicurezza (%)",
+            "valore": _round(margin * 100.0, 1) if margin is not None else None,
+            "soglia": f">= {target:.0%}",
+            "esito": margin is not None and margin >= target,
+        },
+    }
+
+    manual = {
+        "simple_business": "Business comprensibile (\"se c'e' molta tecnologia, non lo capiamo\")",
+        "management_in_place": "Management gia' al suo posto (\"non possiamo fornirlo noi\")",
+        "circle_of_competence": "Dentro il proprio cerchio di competenza",
+    }
+
+    passed = sum(1 for item in checks.values() if item["esito"])
+    total = len(checks)
+    return {
+        "checks": checks,
+        "passed": passed,
+        "total": total,
+        "manual_judgment": manual,
+        "verdict": (
+            "Supera tutti i criteri misurabili" if passed == total
+            else f"Supera {passed} criteri su {total}"
+        ),
+        "note": (
+            "I criteri qualitativi non sono verificabili da un bilancio e restano un "
+            "giudizio tuo. Nessun punteggio li sostituisce."
+        ),
+    }
+
+
 def _verdict(margin_of_safety: Optional[float]) -> str:
     if margin_of_safety is None:
         return "Non valutabile"
@@ -1225,6 +1414,7 @@ def calculate_valuation(
     wacc_override: Optional[float] = None,
     years: int = 10,
     sector: Optional[str] = None,
+    mode: str = "standard",
 ) -> Dict[str, Any]:
     """Valutazione completa di un titolo: fair value, margine di sicurezza, scenari.
 
@@ -1240,6 +1430,12 @@ def calculate_valuation(
         sector: ``"industrial"``, ``"bank"`` o ``"insurance"``; se omesso viene
             riconosciuto dal bilancio. Sui finanziari il DCF viene sostituito dal
             residual income e lo sconto avviene al costo dell'equity.
+        mode: ``"standard"`` oppure ``"buffett"``. In modalita' buffett lo sconto
+            avviene al **tasso del titolo di Stato**, non al WACC da CAPM, come
+            dichiarato all'assemblea Berkshire del 1998 — ma solo se l'azienda supera
+            il filtro di prevedibilita' (vedi :func:`assess_predictability`). Insieme
+            al tasso cambiano crescita terminale (zero) e margine richiesto (50%):
+            sono ipotesi che vanno applicate come blocco, mai una sola.
         years: esercizi di bilancio da considerare.
 
     Returns:
@@ -1248,7 +1444,13 @@ def calculate_valuation(
         ``inputs``, ``assumptions`` e ``data_quality``. Non solleva eccezioni.
     """
     quality = _DataQuality()
+    buffett_mode = str(mode).lower() == "buffett"
     config: Dict[str, Any] = dict(DEFAULT_ASSUMPTIONS)
+    if buffett_mode:
+        # Le ipotesi buffettiane vanno insieme: il tasso basso da solo gonfierebbe
+        # ogni valutazione. Crescita terminale zero e margine al 50% sono il
+        # contrappeso che rende il blocco coerente.
+        config.update(BUFFETT_ASSUMPTIONS)
     if assumptions:
         for key, value in assumptions.items():
             if key in config and value is not None:
@@ -1258,7 +1460,8 @@ def calculate_valuation(
 
     result: Dict[str, Any] = {
         "ticker": ticker.upper(), "company_name": None, "currency": None,
-        "sector": None, "sector_label": None,
+        "sector": None, "sector_label": None, "mode": "standard",
+        "predictability": None, "owner_earnings_yield": None,
         "price": None, "fair_value": {}, "margin_of_safety": None, "verdict": "Non valutabile",
         "methods": {}, "scenarios": {}, "reverse_dcf": {}, "sensitivity": {},
         "cost_of_capital": {}, "inputs": {}, "assumptions": config,
@@ -1297,10 +1500,15 @@ def calculate_valuation(
         result["data_quality"] = quality.as_dict()
         return result
 
+    owner_earnings: Dict[int, Optional[float]] = {}
     if not is_financial:
-        owner_earnings = calculate_owner_earnings(fundamentals, quality)
+        maintenance_capex = estimate_maintenance_capex(fundamentals, quality)
+        owner_earnings = calculate_owner_earnings(
+            fundamentals, quality, maintenance_capex=maintenance_capex
+        )
         for year, value in owner_earnings.items():
             fundamentals[year]["owner_earnings"] = value
+            fundamentals[year]["maintenance_capex"] = maintenance_capex.get(year)
 
     years_desc = sorted(fundamentals, reverse=True)
     latest = fundamentals[years_desc[0]]
@@ -1347,6 +1555,37 @@ def calculate_valuation(
                                 for key, value in capital.items()}
     wacc = capital["wacc"]
     tax_rate = capital["tax_rate"]
+    result["mode"] = "buffett" if buffett_mode else "standard"
+
+    # --- Tasso di sconto in modalita' buffett ---------------------------------
+    if buffett_mode and not is_financial:
+        predictability = assess_predictability(
+            owner_earnings,
+            {year: row.get("net_income") for year, row in fundamentals.items()},
+            quality,
+        )
+        result["predictability"] = predictability
+        if predictability["passes"]:
+            wacc = float(config["risk_free_rate"])
+            capital = dict(capital)
+            capital["wacc"] = wacc
+            capital["discount_rate_source"] = "treasury"
+            quality.note(
+                f"Sconto al tasso del titolo di Stato ({wacc:.2%}) invece del WACC: "
+                "l'azienda supera il filtro di capacita' di reddito dimostrata."
+            )
+        else:
+            capital = dict(capital)
+            capital["discount_rate_source"] = "wacc_fallback"
+            quality.note(
+                f"Tasso del Treasury NON applicato: senza capacita' di reddito "
+                f"dimostrata scontare al {config['risk_free_rate']:.2%} gonfierebbe la "
+                f"valutazione. Si resta al WACC ({wacc:.2%})."
+            )
+        result["cost_of_capital"] = {
+            key: _round(value, 5) if isinstance(value, float) else value
+            for key, value in capital.items()
+        }
 
     # --- Bivio per settore ----------------------------------------------------
     # Su una banca il DCF non e' impreciso: risponde a una domanda che per quel tipo di
@@ -1559,6 +1798,24 @@ def calculate_valuation(
     else:
         result["error"] = "Nessun metodo di valutazione ha prodotto un valore positivo."
 
+    # --- Owner Earnings yield contro il rendimento del titolo di Stato --------
+    # E' il confronto che Buffett fa davvero: "possiamo sempre comprare titoli di
+    # Stato", quindi un'azienda deve rendere di piu' di quelli per meritare il capitale.
+    if base_owner_earnings and price and shares:
+        owner_earnings_per_share_now = base_owner_earnings / shares
+        yield_pct = owner_earnings_per_share_now / price
+        risk_free = float(config["risk_free_rate"])
+        result["owner_earnings_yield"] = {
+            "yield": _round(yield_pct, 4),
+            "risk_free_rate": _round(risk_free, 4),
+            "spread": _round(yield_pct - risk_free, 4),
+            "multiple": _round(price / owner_earnings_per_share_now, 2),
+            "reading": (
+                "Rende piu' del titolo di Stato" if yield_pct > risk_free
+                else "Rende meno del titolo di Stato: il premio va tutto sulla crescita"
+            ),
+        }
+
     # --- Scenari --------------------------------------------------------------
     growth_delta = float(config["scenario_growth_delta"])
     wacc_delta = float(config["scenario_wacc_delta"])
@@ -1736,6 +1993,44 @@ def format_valuation_report(result: Mapping[str, Any], max_notes: int = 10) -> s
         )
     lines.append("")
 
+    if result.get("mode") == "buffett":
+        lines.append("-" * width)
+        lines.append(" CRITERIO #1 - CAPACITA' DI REDDITO DIMOSTRATA")
+        lines.append("-" * width)
+        predictability = result.get("predictability") or {}
+        for item in (predictability.get("requirements") or {}).values():
+            mark = "OK  " if item["passes"] else "NO  "
+            lines.append(f"  {mark}{item['label']:<58}{_fmt(item.get('value'), 2):>10}")
+        source = capital.get("discount_rate_source")
+        if source == "treasury":
+            lines.append(
+                f"  -> Sconto al tasso del titolo di Stato "
+                f"({_fmt((capital.get('wacc') or 0) * 100, 2)}%), come dichiarato "
+                "all'assemblea Berkshire 1998."
+            )
+        elif source == "wacc_fallback":
+            lines.append(
+                "  -> Filtro non superato: il tasso del Treasury non viene applicato, "
+                "si resta al WACC."
+            )
+        lines.append("")
+
+        oe_yield = result.get("owner_earnings_yield")
+        if oe_yield:
+            lines.append("-" * width)
+            lines.append(" OWNER EARNINGS YIELD vs TITOLO DI STATO")
+            lines.append("-" * width)
+            lines.append(
+                f" Rendimento degli Owner Earnings : {_fmt(oe_yield['yield'] * 100, 2)}%"
+                f"   (prezzo = {_fmt(oe_yield['multiple'], 1)}x gli Owner Earnings)"
+            )
+            lines.append(
+                f" Titolo di Stato                 : {_fmt(oe_yield['risk_free_rate'] * 100, 2)}%"
+                f"   differenza {_fmt(oe_yield['spread'] * 100, 2)} punti"
+            )
+            lines.append(f" Lettura                         : {oe_yield['reading']}")
+            lines.append("")
+
     lines.append("-" * width)
     lines.append(" METODI DI VALUTAZIONE")
     lines.append("-" * width)
@@ -1886,3 +2181,29 @@ if __name__ == "__main__":
     for symbol in symbols:
         print(f"\nValutazione di {symbol.upper()} ...\n")
         print(format_valuation_report(calculate_valuation(symbol, **cli_overrides)))
+
+
+def format_buffett_scorecard(scorecard: Mapping[str, Any]) -> str:
+    """Rende leggibile l'output di :func:`buffett_scorecard`."""
+    width = 92
+    lines = ["=" * width, " SCORECARD SUI CRITERI DI BERKSHIRE", "=" * width]
+    lines.append(
+        f" Criteri misurabili superati: {scorecard['passed']} su {scorecard['total']}"
+    )
+    lines.append("")
+    lines.append(f" {'':4}{'Criterio':<50}{'Misurato':>12}{'Soglia':>12}")
+    lines.append(" " + "-" * (width - 2))
+    for item in scorecard["checks"].values():
+        mark = "OK " if item["esito"] else "NO "
+        value = "n/d" if item["valore"] is None else f"{item['valore']:,.2f}"
+        lines.append(
+            f" {mark} {item['criterio']:<50}{value:>12}{item['soglia']:>12}"
+        )
+    lines.append("")
+    lines.append(" Criteri che un bilancio non puo' verificare (giudizio tuo):")
+    for label in scorecard["manual_judgment"].values():
+        lines.append(f"    ?  {label}")
+    lines.append("")
+    lines.append(f" {scorecard['note']}")
+    lines.append("=" * width)
+    return "\n".join(lines)

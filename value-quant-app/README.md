@@ -15,7 +15,7 @@ value-quant-app/
 │   ├── backtest.py              "questa regola ha funzionato?" -> equity curve e rischio
 │   ├── sectors.py               profili industriale / banca / assicurazione
 │   └── visualize.py             tear sheet e grafici in tema scuro
-└── tests/                       44 test offline, nessuna rete richiesta
+└── tests/                       61 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
@@ -100,6 +100,51 @@ python run_analysis.py BRK-B --sector insurance # profilo forzato a mano
 vivono nelle segnalazioni regolamentari. Il profilo bancario usa patrimonio/attivo e
 costo del credito come proxy e lo scrive in `data_quality.missing`. Un proxy segnalato
 e' onesto; un proxy spacciato per il ratio vero no.
+
+---
+
+## 0-bis. Modalità Buffett — `--buffett`
+
+Il modello standard è ispirato ai principi di Buffett; la modalità `--buffett` li applica
+**alla lettera**, sulle sue fonti primarie. Quattro differenze:
+
+| | Standard | `--buffett` | Fonte |
+|---|---|---|---|
+| Metrica principale | ROIC su capitale investito | **Rendimento ante imposte su capitale tangibile** (avviamento escluso) | Lettera 2007, See's Candies |
+| Leva finanziaria | Debt/EBITDA | **Debito / Owner Earnings** (anni per ripagarlo) | Lettera 2000: *"il management pensa che la fatina dei denti paghi il CapEx?"* |
+| CapEx negli Owner Earnings | totale | **di mantenimento** (metodo Greenwald) | Lettera 1986, appendice |
+| Tasso di sconto | WACC da CAPM | **tasso del titolo di Stato** | Assemblea 1998 |
+
+**Il tasso basso non è un regalo, è il complemento di una selezione severa.** Buffett può
+scontare al 4% perché compra solo ciò di cui è "abbastanza certo". Applicare quel tasso a
+un business imprevedibile è il modo più rapido di travisarlo — il valore esploderebbe.
+
+Quindi la modalità impone un **filtro di prevedibilità** (il criterio #1: *demonstrated
+consistent earning power*): utile netto e Owner Earnings positivi in ogni esercizio,
+coefficiente di variazione degli Owner Earnings sotto 0.50, almeno 4 anni di storia. Se
+l'azienda non passa, **il tasso del Treasury non viene applicato** e si resta al WACC, con
+l'avviso in chiaro.
+
+E le ipotesi vanno insieme, mai una sola: crescita terminale **zero**, tetto alla crescita
+esplicita al 10%, normalizzazione su 5 anni e margine di sicurezza richiesto al **50%**
+invece del 30%. Il tasso basso alza il fair value; il margine doppio lo riporta a terra.
+
+```bash
+python run_analysis.py KO --buffett
+```
+
+In più stampa due cose che il modello standard non ha:
+
+- **Owner Earnings yield contro il titolo di Stato** — il confronto che Buffett fa
+  davvero: *"possiamo sempre comprare titoli di Stato"*, quindi un'azienda deve rendere
+  più di quelli per meritare il capitale;
+- **Scorecard sui criteri di acquisizione** pubblicati in ogni annual report dal 1982,
+  con i tre criteri qualitativi (business comprensibile, management già al suo posto,
+  cerchio di competenza) marcati come **giudizio manuale** invece che ignorati.
+
+Sui finanziari la modalità viene ignorata con un avviso: i criteri di Berkshire parlano di
+aziende operative, e "poco o nessun debito" è incompatibile con il modello di business di
+una banca.
 
 ---
 
@@ -230,8 +275,9 @@ Nessun modulo solleva eccezioni sui dati incompleti: calcola quello che puo' e r
 tutto in `data_quality`, distinguendo `estimated` (approssimazioni) da `missing`.
 Le approssimazioni tipiche:
 
-- **CapEx di mantenimento**: non separabile in bilancio, si usa il **CapEx totale** come
-  proxy — gli Owner Earnings risultano quindi prudenziali;
+- **CapEx di mantenimento**: stimato col metodo Greenwald (CapEx totale meno
+  immobilizzazioni/ricavi × incremento dei ricavi); quando mancano le immobilizzazioni si
+  ripiega sugli ammortamenti, e in ultima istanza sul CapEx totale;
 - EBIT approssimato col reddito operativo, o stimato come utile ante imposte + oneri finanziari;
 - EBITDA stimato come EBIT + D&A quando non riportato;
 - debito totale ricostruito come debito a breve + lungo termine;
@@ -246,13 +292,14 @@ Le approssimazioni tipiche:
 
 ## Test
 
-44 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
+61 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
 
 ```bash
 python tests/test_quality_score.py    # metriche di bilancio e consistenza
 python tests/test_valuation.py        # DCF, reverse DCF, EPV, WACC (verifiche analitiche)
 python tests/test_backtest.py         # point-in-time, metriche di rischio, sweep
 python tests/test_sectors.py          # banche e assicurazioni: metriche e metodi giusti
+python tests/test_buffett.py          # criteri di Berkshire, CapEx di mantenimento, filtro
 python tests/test_pipeline.py         # integrazione: i grafici sui dizionari reali
 ```
 

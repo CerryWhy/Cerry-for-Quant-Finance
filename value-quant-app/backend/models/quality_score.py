@@ -53,6 +53,8 @@ __all__ = [
     "calculate_roa",
     "calculate_margins",
     "calculate_owner_earnings",
+    "estimate_maintenance_capex",
+    "calculate_return_on_tangible_capital",
     "calculate_balance_sheet_ratios",
     "calculate_consistency",
     "calculate_quality_score",
@@ -126,6 +128,17 @@ BALANCE_ALIASES: Dict[str, Sequence[str]] = {
     "invested_capital": ("Invested Capital",),
     "shares_outstanding": ("Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"),
     "tangible_book_value": ("Tangible Book Value", "Net Tangible Assets"),
+    # Servono per il CapEx di mantenimento (rapporto immobilizzazioni/ricavi) e per il
+    # rendimento sul capitale **tangibile**, che e' il metro di Buffett.
+    "net_ppe": (
+        "Net PPE", "Net Property Plant And Equipment",
+        "Property Plant And Equipment Net", "Gross PPE",
+    ),
+    "goodwill": ("Goodwill",),
+    "intangibles": (
+        "Other Intangible Assets", "Intangible Assets",
+        "Goodwill And Other Intangible Assets",
+    ),
 }
 
 CASHFLOW_ALIASES: Dict[str, Sequence[str]] = {
@@ -598,22 +611,106 @@ def calculate_margins(
     return {"operating_margin": operating, "net_margin": net, "gross_margin": gross}
 
 
-def calculate_owner_earnings(
+def estimate_maintenance_capex(
     fundamentals: Mapping[int, Mapping[str, Optional[float]]],
     quality: Optional[_DataQuality] = None,
 ) -> Dict[int, Optional[float]]:
+    """Stima il CapEx **di mantenimento** separandolo da quello di crescita.
+
+    Buffett definisce gli Owner Earnings sottraendo "la media annua degli investimenti
+    capitalizzati che l'azienda richiede per mantenere pienamente la propria posizione
+    competitiva e il proprio volume". Quella cifra non compare in nessun bilancio:
+    va stimata.
+
+    Il metodo usato e' quello di **Bruce Greenwald** (Columbia), lo standard nella
+    letteratura value::
+
+        immobilizzazioni/ricavi = media storica di (immobilizzazioni nette / ricavi)
+        CapEx di crescita       = immobilizzazioni/ricavi x incremento dei ricavi
+        CapEx di mantenimento   = CapEx totale - CapEx di crescita
+
+    L'intuizione: se servono 40 centesimi di impianti per ogni euro di ricavo, allora
+    crescere di 100 di ricavi richiede 40 di investimento *aggiuntivo*; il resto del
+    CapEx serviva a stare fermi. Quando i ricavi calano il CapEx di crescita e' zero e
+    tutto il CapEx e' di mantenimento.
+
+    Ripieghi, in ordine: se mancano le immobilizzazioni si usa il **D&A** (gli
+    ammortamenti approssimano il logorio da rimpiazzare); se manca anche quello si
+    torna al CapEx totale, che e' la stima piu' prudente possibile.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    years_desc = sorted(fundamentals, reverse=True)
+
+    ratios = [
+        _safe_div(fundamentals[year].get("net_ppe"), fundamentals[year].get("revenue"))
+        for year in years_desc
+    ]
+    ppe_to_sales = _mean(ratios)
+
+    output: Dict[int, Optional[float]] = {}
+    for year in years_desc:
+        row = fundamentals[year]
+        capex = row.get("capex")
+        if capex is None:
+            output[year] = None
+            continue
+        capex = abs(capex)
+
+        previous = fundamentals.get(year - 1)
+        revenue = row.get("revenue")
+        previous_revenue = previous.get("revenue") if previous else None
+
+        if ppe_to_sales is not None and revenue is not None and previous_revenue is not None:
+            # Solo la crescita dei ricavi assorbe investimento aggiuntivo: se calano,
+            # il CapEx di crescita e' zero e tutto il CapEx serve a mantenere.
+            growth_capex = ppe_to_sales * max(0.0, revenue - previous_revenue)
+            output[year] = max(0.0, capex - growth_capex)
+        elif row.get("d_and_a") is not None:
+            output[year] = min(capex, abs(row["d_and_a"]))
+            quality.estimate(
+                f"{year}: CapEx di mantenimento stimato con gli ammortamenti "
+                "(immobilizzazioni o ricavi dell'anno precedente non disponibili)."
+            )
+        else:
+            output[year] = capex
+            quality.estimate(
+                f"{year}: CapEx di mantenimento non separabile: usato il CapEx totale."
+            )
+
+    if ppe_to_sales is not None:
+        quality.note(
+            f"CapEx di mantenimento stimato col metodo Greenwald, rapporto "
+            f"immobilizzazioni/ricavi {ppe_to_sales:.2f}."
+        )
+    return output
+
+
+def calculate_owner_earnings(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: Optional[_DataQuality] = None,
+    maintenance_capex: Optional[Mapping[int, Optional[float]]] = None,
+) -> Dict[int, Optional[float]]:
     """Owner Earnings alla Buffett, anno per anno.
 
-    Formula::
+    Formula (lettera agli azionisti 1986, appendice)::
 
-        Owner Earnings = Utile Netto + D&A - CapEx di mantenimento - Δ Capitale Circolante
+        Owner Earnings = Utile Netto
+                       + Ammortamenti e altre poste non monetarie
+                       - CapEx di mantenimento
+                       -/+ Variazione del capitale circolante
 
-    Il CapEx di mantenimento non e' riportato separatamente in bilancio: viene usato
-    il **CapEx totale** come proxy (approssimazione conservativa, segnalata in
-    ``data_quality``). La variazione di capitale circolante e' presa dalla voce
-    "Change In Working Capital" del rendiconto finanziario, che yfinance riporta gia'
-    con segno di impatto sulla cassa (positiva = circolante liberato); se manca, viene
-    stimata dalla differenza anno su anno di (attivo corrente - passivo corrente).
+    Args:
+        maintenance_capex: serie del CapEx di mantenimento. Se omessa viene usato il
+            **CapEx totale**, che e' una stima prudenziale (sottrae anche gli
+            investimenti di crescita, quindi comprime gli Owner Earnings di un'azienda
+            in espansione). Per la stima fedele si passa l'output di
+            :func:`estimate_maintenance_capex`.
+
+    **Sul segno della variazione di circolante**: yfinance riporta la voce
+    "Change In Working Capital" gia' come *impatto sulla cassa* (positiva = circolante
+    liberato), quindi si somma. Se manca, viene stimata dalla differenza anno su anno di
+    (attivo corrente - passivo corrente), col segno invertito perche' un aumento del
+    circolante assorbe cassa.
     """
     quality = quality if quality is not None else _DataQuality()
     out: Dict[int, Optional[float]] = {}
@@ -624,7 +721,10 @@ def calculate_owner_earnings(
         try:
             net_income = row.get("net_income")
             d_and_a = row.get("d_and_a")
-            capex = row.get("capex")
+            if maintenance_capex is not None:
+                capex = maintenance_capex.get(year)
+            else:
+                capex = row.get("capex")
             if net_income is None:
                 quality.miss(f"{year}: utile netto mancante, Owner Earnings non calcolabile.")
                 out[year] = None
@@ -640,10 +740,12 @@ def calculate_owner_earnings(
                 capex = 0.0
                 quality.estimate(f"{year}: CapEx non disponibile, considerato pari a zero.")
             else:
-                quality.estimate(
-                    "CapEx di mantenimento non separabile dal CapEx totale: "
-                    "usato il CapEx totale come proxy (Owner Earnings prudenziale)."
-                )
+                capex = abs(capex)
+                if maintenance_capex is None:
+                    quality.estimate(
+                        "CapEx di mantenimento non stimato: usato il CapEx totale come "
+                        "proxy (Owner Earnings prudenziali)."
+                    )
 
             delta_wc_cash_impact = row.get("change_in_working_capital")
             if delta_wc_cash_impact is None:
@@ -651,7 +753,6 @@ def calculate_owner_earnings(
                 current_wc = _working_capital(row)
                 previous_wc = _working_capital(previous) if previous else None
                 if current_wc is not None and previous_wc is not None:
-                    # Un aumento del circolante assorbe cassa -> impatto negativo.
                     delta_wc_cash_impact = -(current_wc - previous_wc)
                     quality.estimate(
                         f"{year}: variazione del capitale circolante stimata dallo stato "
@@ -667,6 +768,62 @@ def calculate_owner_earnings(
             out[year] = net_income + d_and_a - capex + delta_wc_cash_impact
         except Exception as exc:  # pragma: no cover - difensivo
             quality.note(f"{year}: Owner Earnings non calcolabile ({exc}).")
+            out[year] = None
+    return out
+
+
+def calculate_return_on_tangible_capital(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: Optional[_DataQuality] = None,
+    pretax: bool = True,
+) -> Dict[int, Optional[float]]:
+    """Rendimento sul capitale **tangibile senza leva** — il metro di Buffett.
+
+    Nella lettera del 2007 Buffett misura le aziende sul "return on unleveraged net
+    tangible assets", e cita See's Candies oltre il **200% ante imposte**. La differenza
+    rispetto al ROIC ordinario e' che il denominatore **esclude avviamento e
+    immateriali**::
+
+        Capitale tangibile = Debito Totale + Patrimonio Netto - Cassa
+                             - Avviamento - Immateriali
+        Rendimento = EBIT / Capitale tangibile          (ante imposte)
+
+    Perche' toglie l'avviamento: quello e' il prezzo pagato in passato per delle
+    acquisizioni, non il capitale che il business richiede *oggi* per funzionare. Un
+    ROIC che lo include dice quanto e' stato bravo chi ha comprato; questo dice quanto
+    e' buono il business in se'. Su un'azienda cresciuta per acquisizioni i due numeri
+    divergono moltissimo.
+
+    Args:
+        pretax: se ``True`` usa l'EBIT (come Buffett), altrimenti il NOPAT.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    out: Dict[int, Optional[float]] = {}
+    for year, row in fundamentals.items():
+        try:
+            ebit = row.get("ebit")
+            invested = row.get("invested_capital_calc")
+            if ebit is None or invested is None:
+                out[year] = None
+                continue
+            goodwill = row.get("goodwill") or 0.0
+            intangibles = row.get("intangibles") or 0.0
+            if row.get("goodwill") is None and row.get("intangibles") is None:
+                quality.estimate(
+                    f"{year}: avviamento e immateriali non disponibili, capitale "
+                    "tangibile assunto pari al capitale investito."
+                )
+            tangible = invested - goodwill - intangibles
+            if tangible <= 0:
+                quality.note(
+                    f"{year}: capitale tangibile non positivo, rendimento non calcolato."
+                )
+                out[year] = None
+                continue
+            earnings = ebit if pretax else ebit * (1.0 - (row.get("tax_rate") or DEFAULT_TAX_RATE))
+            out[year] = earnings / tangible * 100.0
+        except Exception as exc:  # pragma: no cover - difensivo
+            quality.note(f"{year}: rendimento sul capitale tangibile non calcolabile ({exc}).")
             out[year] = None
     return out
 
@@ -859,7 +1016,11 @@ def _industrial_metrics(
     roe = calculate_roe(fundamentals, quality)
     roa = calculate_roa(fundamentals, quality)
     margins = calculate_margins(fundamentals, quality)
-    owner_earnings = calculate_owner_earnings(fundamentals, quality)
+    maintenance_capex = estimate_maintenance_capex(fundamentals, quality)
+    owner_earnings = calculate_owner_earnings(
+        fundamentals, quality, maintenance_capex=maintenance_capex
+    )
+    tangible_return = calculate_return_on_tangible_capital(fundamentals, quality)
     ratios = calculate_balance_sheet_ratios(fundamentals, quality)
 
     owner_earnings_margin = {
@@ -883,6 +1044,21 @@ def _industrial_metrics(
         "gross_margin": margins["gross_margin"],
         "owner_earnings": owner_earnings,
         "owner_earnings_margin": owner_earnings_margin,
+        "maintenance_capex": {year: maintenance_capex.get(year) for year in years},
+        "capex": {year: fundamentals[year].get("capex") for year in years},
+        "return_on_tangible_capital": tangible_return,
+        # Anni di Owner Earnings necessari a estinguere il debito: la domanda che conta,
+        # e insensibile ai trucchi contabili che rendono l'EBITDA poco affidabile.
+        "debt_to_owner_earnings": {
+            year: (
+                0.0 if (fundamentals[year].get("total_debt") == 0)
+                else _safe_div(
+                    fundamentals[year].get("total_debt"),
+                    owner_earnings.get(year) if (owner_earnings.get(year) or 0) > 0 else None,
+                )
+            )
+            for year in years
+        },
         "debt_to_equity": ratios["debt_to_equity"],
         "debt_to_ebitda": ratios["debt_to_ebitda"],
         "interest_coverage": ratios["interest_coverage"],
@@ -944,6 +1120,7 @@ def calculate_quality_score(
     years: int = DEFAULT_YEARS,
     financials: Optional[Mapping[str, Any]] = None,
     sector: Optional[str] = None,
+    mode: str = "standard",
 ) -> Dict[str, Any]:
     """Calcola il Quality Score (0-100) di un'azienda.
 
@@ -960,6 +1137,11 @@ def calculate_quality_score(
             assicurativi). Il settore determina **quali** metriche vengono calcolate e
             con quali soglie: applicare il metro industriale a una banca produce numeri
             plausibili e privi di significato.
+        mode: ``"standard"`` oppure ``"buffett"``. In modalita' buffett le aziende
+            operative vengono misurate sui criteri pubblicati negli annual report di
+            Berkshire: rendimento ante imposte sul capitale **tangibile** al posto del
+            ROIC, Debito / Owner Earnings al posto del Debt/EBITDA (che Buffett rifiuta
+            apertamente), e soglie piu' severe su debito e continuita' degli utili.
 
     Returns:
         Dizionario con ``quality_score``, ``rating``, ``category_scores`` (punteggio
@@ -977,6 +1159,8 @@ def calculate_quality_score(
         "currency": None,
         "sector": None,
         "sector_label": None,
+        "mode": "standard",
+        "profile": None,
         "years_analyzed": [],
         "quality_score": None,
         "rating": "Non valutabile",
@@ -1044,9 +1228,16 @@ def calculate_quality_score(
     fundamentals = {year: fundamentals[year] for year in years_desc}
     result["years_analyzed"] = years_desc
 
-    # --- Settore --------------------------------------------------------------
-    profile = sectors.PROFILES[sector]
+    # --- Settore e modalita' ---------------------------------------------------
+    profile, profile_key = sectors.resolve_profile(sector, mode)
+    if str(mode).lower() == sectors.BUFFETT and profile_key != sectors.BUFFETT:
+        quality.note(
+            "Modalita' buffett ignorata: i criteri pubblicati di Berkshire riguardano "
+            "aziende operative, non banche o assicurazioni."
+        )
     result["sector"] = sector
+    result["mode"] = profile_key if profile_key == sectors.BUFFETT else "standard"
+    result["profile"] = profile_key
     result["sector_label"] = profile["label"]
     if sector != sectors.INDUSTRIAL:
         fundamentals = sectors.extract_sector_fundamentals(
@@ -1069,7 +1260,7 @@ def calculate_quality_score(
     # --- Consistenza ---------------------------------------------------------
     consistency = {
         name: calculate_consistency(metrics[name])
-        for name in sectors.CONSISTENCY_TARGETS[sector] if name in metrics
+        for name in sectors.CONSISTENCY_TARGETS[profile_key] if name in metrics
     }
     result["consistency"] = {
         name: {key: _round(value, 4) for key, value in stats.items()}
@@ -1079,7 +1270,7 @@ def calculate_quality_score(
     # --- Medie ---------------------------------------------------------------
     averages = {
         name: _mean(metrics[name].values())
-        for name in sectors.AVERAGE_TARGETS[sector] if name in metrics
+        for name in sectors.AVERAGE_TARGETS[profile_key] if name in metrics
     }
     result["averages"] = {name: _round(value, 4) for name, value in averages.items()}
 
@@ -1211,7 +1402,8 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
         except ImportError:
             import sectors  # type: ignore[no-redef]
         table_rows = sectors.TABLE_ROWS.get(
-            result.get("sector") or sectors.INDUSTRIAL, sectors.TABLE_ROWS[sectors.INDUSTRIAL]
+            result.get("profile") or result.get("sector") or sectors.INDUSTRIAL,
+            sectors.TABLE_ROWS[sectors.INDUSTRIAL],
         )
         lines.append("-" * width)
         lines.append(" METRICHE ANNO PER ANNO (dal piu' recente)")
