@@ -15,14 +15,19 @@ value-quant-app/
 │   ├── backtest.py              "questa regola ha funzionato?" -> equity curve e rischio
 │   ├── sectors.py               profili industriale / banca / assicurazione
 │   └── visualize.py             tear sheet e grafici in tema scuro
+├── docs/
+│   ├── COMANDI.md               guida rapida a tutte le opzioni
+│   └── METODOLOGIA.md           formule, soglie e come si leggono i numeri
 └── tests/                       61 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
 
-**[Metodologia completa](docs/METODOLOGIA.md)** — cosa calcola ogni modulo, con quali
-formule, e come si leggono i numeri che produce. Disponibile anche in
-[PDF](docs/Metodologia-value-quant-app.pdf).
+- **[Guida ai comandi](docs/COMANDI.md)** — tutte le opzioni, le combinazioni utili e la
+  diagnostica quando un numero sembra assurdo. È il file da tenere aperto mentre lavori.
+- **[Metodologia completa](docs/METODOLOGIA.md)** — cosa calcola ogni modulo, con quali
+  formule, e come si leggono i numeri che produce. Disponibile anche in
+  [PDF](docs/Metodologia-value-quant-app.pdf).
 
 ## Avvio rapido
 
