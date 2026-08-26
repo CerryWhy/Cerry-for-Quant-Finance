@@ -51,8 +51,10 @@ except ImportError:  # pragma: no cover
 
 try:  # import come package (backend.models.valuation)
     from .quality_score import (
+        DEFAULT_RD_LIFE,
         DEFAULT_TAX_RATE,
         calculate_consistency,
+        capitalize_research_development,
         estimate_maintenance_capex,
         _DataQuality,
         _fmt,
@@ -67,8 +69,10 @@ try:  # import come package (backend.models.valuation)
     )
 except ImportError:  # import come script standalone
     from quality_score import (  # type: ignore[no-redef]
+        DEFAULT_RD_LIFE,
         DEFAULT_TAX_RATE,
         calculate_consistency,
+        capitalize_research_development,
         estimate_maintenance_capex,
         _DataQuality,
         _fmt,
@@ -1415,6 +1419,8 @@ def calculate_valuation(
     years: int = 10,
     sector: Optional[str] = None,
     mode: str = "standard",
+    capitalize_rd: bool = False,
+    rd_life: int = DEFAULT_RD_LIFE,
 ) -> Dict[str, Any]:
     """Valutazione completa di un titolo: fair value, margine di sicurezza, scenari.
 
@@ -1437,6 +1443,10 @@ def calculate_valuation(
             al tasso cambiano crescita terminale (zero) e margine richiesto (50%):
             sono ipotesi che vanno applicate come blocco, mai una sola.
         years: esercizi di bilancio da considerare.
+        capitalize_rd: se ``True`` la R&S viene trattata come investimento (metodo
+            Damodaran, vedi ``quality_score.capitalize_research_development``). Alza gli
+            Owner Earnings di chi fa ricerca in crescita, e quindi il fair value del DCF.
+        rd_life: vita utile in anni della R&S capitalizzata (5 software, 10 farma).
 
     Returns:
         Dizionario con ``fair_value``, ``margin_of_safety``, ``verdict``, ``methods``,
@@ -1499,6 +1509,16 @@ def calculate_valuation(
         result["error"] = f"Nessun dato di bilancio utilizzabile per {ticker.upper()}."
         result["data_quality"] = quality.as_dict()
         return result
+
+    # La R&S va capitalizzata prima degli Owner Earnings: il DCF sconta quelli, e la
+    # rettifica sull'utile netto si propaga da sola nella loro formula.
+    if capitalize_rd:
+        if is_financial:
+            quality.note(
+                "Capitalizzazione della R&S ignorata: non si applica ai finanziari."
+            )
+        else:
+            capitalize_research_development(fundamentals, rd_life, quality)
 
     owner_earnings: Dict[int, Optional[float]] = {}
     if not is_financial:

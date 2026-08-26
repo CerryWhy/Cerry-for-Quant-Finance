@@ -25,6 +25,8 @@ Senza ticker analizza `AAPL`. I ticker si separano con uno spazio, maiuscole o m
 |---|---|---|---|
 | `--buffett` | — | off | Criteri e tasso di sconto di Buffett, più la scorecard |
 | `--sector` | `industrial` \| `bank` \| `insurance` | auto | Forza il profilo invece del riconoscimento automatico |
+| `--capitalize-rd` | flag | off | Tratta la R&S come investimento invece che come costo (Damodaran) |
+| `--rd-life` | intero | `5` | Vita utile della R&S capitalizzata: 5 software, 10 farmaceutico |
 | `--backtest` | — | off | Backtest della strategia (serve un minimo di **3 titoli**) |
 | `--sweep` | — | off | Sweep dei parametri; attiva da solo `--backtest`. **Lento** |
 | `--top` | numero | `5` | Quanti titoli tiene in portafoglio il backtest |
@@ -107,6 +109,27 @@ contare — succede con gli industriali ricchi di liquidità, che espongono un m
 interesse dell'1% dei ricavi — la nota lo dichiara. Se il profilo scelto non convince,
 `--sector` lo forza.
 
+### Aziende che vivono di ricerca
+
+Spesare la R&S gonfia il ROIC (il capitale investito ignora anni di sviluppo) e deprime
+gli Owner Earnings (la ricerca di crescita è sottratta per intero dall'utile). Con
+`--capitalize-rd` la ricerca diventa un investimento ammortizzato:
+
+```bash
+python run_analysis.py GOOGL                         # R&S spesata (principio contabile)
+python run_analysis.py GOOGL --capitalize-rd         # R&S capitalizzata su 5 anni
+python run_analysis.py PFE --capitalize-rd --rd-life 10   # vita utile del farmaceutico
+```
+
+L'uso corretto è lanciarlo **due volte** e leggere la differenza: le soglie di punteggio
+sono tarate su bilanci non rettificati, quindi i due punteggi complessivi non sono
+confrontabili fra loro. Quello che si confronta è ROIC e Owner Earnings prima e dopo. Il
+report aggiunge un blocco `CAPITALIZZAZIONE DELLA R&S` con spesa, ammortamento e asset
+anno per anno.
+
+Non serve su chi non fa ricerca: senza la voce in bilancio l'opzione non cambia nulla e
+lo dichiara. Sui finanziari viene ignorata.
+
 ### Grafici
 
 ```bash
@@ -152,6 +175,7 @@ python tests/test_valuation.py
 python tests/test_backtest.py
 python tests/test_sectors.py
 python tests/test_buffett.py
+python tests/test_research.py
 python tests/test_pipeline.py
 ```
 

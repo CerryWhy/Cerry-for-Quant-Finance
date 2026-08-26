@@ -13,6 +13,8 @@ Esempi::
     python run_analysis.py JPM               # profilo bancario riconosciuto da solo
     python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
     python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
+    python run_analysis.py GOOGL --capitalize-rd          # R&S come investimento
+    python run_analysis.py PFE --capitalize-rd --rd-life 10   # vita utile del farmaceutico
 
 Ogni esecuzione produce: i report testuali a schermo, i grafici in PNG nella cartella
 di output e, con ``--json``, il dizionario completo dei risultati.
@@ -36,6 +38,7 @@ from models.backtest import (  # noqa: E402
     sweep_parameters,
 )
 from models.quality_score import (  # noqa: E402
+    DEFAULT_RD_LIFE,
     LOW_COVERAGE,
     calculate_quality_score,
     fetch_financials,
@@ -68,6 +71,8 @@ def analyze_ticker(
     wacc_override: Optional[float] = None,
     sector: Optional[str] = None,
     mode: str = "standard",
+    capitalize_rd: bool = False,
+    rd_life: int = DEFAULT_RD_LIFE,
 ) -> Dict[str, Any]:
     """Qualita' + valutazione di un titolo, con un solo download dei bilanci.
 
@@ -77,13 +82,14 @@ def analyze_ticker(
     """
     financials = fetch_financials(ticker, years=years)
     quality = calculate_quality_score(
-        ticker, years=years, financials=financials, sector=sector, mode=mode
+        ticker, years=years, financials=financials, sector=sector, mode=mode,
+        capitalize_rd=capitalize_rd, rd_life=rd_life,
     )
     market_data = fetch_market_data(ticker)
     valuation = calculate_valuation(
         ticker, financials=financials, market_data=market_data,
         growth_override=growth_override, wacc_override=wacc_override, years=years,
-        sector=sector, mode=mode,
+        sector=sector, mode=mode, capitalize_rd=capitalize_rd, rd_life=rd_life,
     )
     analysis = {
         "ticker": ticker.upper(),
@@ -247,6 +253,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
         "tickers": [], "out": "output", "backtest": False, "charts": True,
         "show": False, "json": False, "demo": False, "years": 10,
         "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None, "mode": "standard",
+        "capitalize_rd": False, "rd_life": DEFAULT_RD_LIFE,
     }
     index = 0
     while index < len(argv):
@@ -273,6 +280,10 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["json"] = True; index += 1
         elif argument == "--buffett":
             options["mode"] = "buffett"; index += 1
+        elif argument == "--capitalize-rd":
+            options["capitalize_rd"] = True; index += 1
+        elif argument == "--rd-life" and index + 1 < len(argv):
+            options["rd_life"] = int(argv[index + 1]); index += 2
         elif argument == "--sector" and index + 1 < len(argv):
             options["sector"] = argv[index + 1]; index += 2
         elif argument == "--lang" and index + 1 < len(argv):
@@ -313,6 +324,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ticker, years=options["years"],
             growth_override=options["growth"], wacc_override=options["wacc"],
             sector=options["sector"], mode=options["mode"],
+            capitalize_rd=options["capitalize_rd"], rd_life=options["rd_life"],
         )
         analyses.append(analysis)
         print(format_report(analysis["quality"]))

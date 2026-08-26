@@ -10,13 +10,14 @@ e soprattutto **come si leggono i numeri che produce**.
 1. [L'impianto: quattro domande, quattro moduli](#1-limpianto)
 2. [Modulo 0 — Profili di settore](#15-profili-di-settore)
 3. [Modalità Buffett](#buffett-mode)
-4. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
-5. [Modulo 2 — Valuation](#3-modulo-2--valuation)
-6. [Modulo 3 — Backtest](#4-modulo-3--backtest)
-7. [Modulo 4 — Visualize](#5-modulo-4--visualize)
-8. [Come si usano insieme](#6-come-si-usano-insieme)
-9. [Glossario](#7-glossario)
-10. [Limiti e avvertenze](#8-limiti-e-avvertenze)
+4. [Capitalizzazione della R&S](#rd-capitalization)
+5. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
+6. [Modulo 2 — Valuation](#3-modulo-2--valuation)
+7. [Modulo 3 — Backtest](#4-modulo-3--backtest)
+8. [Modulo 4 — Visualize](#5-modulo-4--visualize)
+9. [Come si usano insieme](#6-come-si-usano-insieme)
+10. [Glossario](#7-glossario)
+11. [Limiti e avvertenze](#8-limiti-e-avvertenze)
 
 ---
 
@@ -400,6 +401,107 @@ cerca di imitare. Ma resta un'imitazione.
 Per questo il **reverse DCF** è lo strumento più fedele di tutto il modello: non proietta
 niente, misura solo cosa il mercato sta già scontando. È l'unico che rispetta davvero il
 *"no projections"*.
+
+---
+
+<a name="rd-capitalization"></a>
+## 1-quater. Capitalizzazione della R&S
+
+`--capitalize-rd`, opzionale, ortogonale al settore e alla modalità.
+
+Il principio contabile impone di spesare la ricerca nell'anno in cui viene sostenuta. È
+prudente, e per un'azienda che vive di ricerca è **sbagliato in due direzioni
+contemporaneamente**:
+
+- il **ROIC risulta gonfiato**, perché il denominatore ignora il capitale accumulato in
+  anni di sviluppo. Un'azienda che ha speso duecento miliardi in ricerca mostra un
+  capitale investito che non li contiene, e un rendimento su quel capitale che sembra
+  irripetibile;
+- gli **Owner Earnings risultano depressi**, perché la ricerca che serve a *crescere*
+  viene sottratta per intero dall'utile dell'anno — esattamente come il CapEx di
+  crescita, che il modello invece separa già col metodo Greenwald.
+
+I due errori non si compensano: spingono nella stessa direzione la conclusione «azienda
+straordinaria che però non genera cassa», che è un artefatto contabile. È il motivo per
+cui il tech legge male con metriche pensate per l'industria.
+
+### Il metodo
+
+Quello di Damodaran (*The Dark Side of Valuation*): si costruisce un **asset di ricerca**
+ammortizzato linearmente su una vita utile dichiarata.
+
+```
+asset di ricerca = Σ  R&S(t−i) × (vita − i) / vita      per i = 0 … vita−1
+ammortamento(t)  = Σ  R&S(t−i) / vita                   per i = 1 … vita
+```
+
+La spesa dell'anno corrente non è ancora ammortizzata (peso 1), quella dell'anno
+precedente ha consumato un anno di vita utile (peso (vita−1)/vita), e così via fino a
+zero. Il bilancio viene rettificato di conseguenza:
+
+| Voce | Rettifica |
+|---|---|
+| EBIT, reddito operativo | + R&S dell'anno − ammortamento |
+| EBITDA | + R&S dell'anno (non contiene ammortamenti) |
+| Utile netto | + (R&S − ammortamento) × (1 − aliquota) |
+| Patrimonio, capitale investito, totale attivo | + asset di ricerca |
+| Immateriali | + asset di ricerca |
+
+**In regime stazionario non cambia nulla nell'utile.** Con R&S costante, ammortamento e
+spesa coincidono: la rettifica sull'utile è esattamente zero e cambia solo il
+denominatore. Il ROIC scende al suo livello vero. Questo è il controllo che dimostra che
+la capitalizzazione non è un modo di gonfiare gli utili — e un test lo verifica
+sull'aritmetica, non sull'output del codice. Quando la R&S cresce la rettifica diventa
+positiva, ed è il caso normale nel tech.
+
+### La vita utile, e perché non è un dettaglio
+
+| Settore | Vita utile | Ragione |
+|---|---|---|
+| Software, tech | **5 anni** (default) | un ciclo di sviluppo esaurisce il suo contributo in fretta |
+| Farmaceutico | **10 anni** (`--rd-life 10`) | un composto approvato genera ricavi per un decennio |
+| Industriale pesante | 10 o più | i cicli di prodotto sono lunghi |
+
+Con R&S costante la vita utile **non tocca l'ammortamento** (resta pari alla spesa):
+cambia solo la dimensione dell'asset, e quindi il ROIC. Raddoppiare la vita utile
+raddoppia circa il capitale imputato alla ricerca.
+
+### Due scelte dichiarate
+
+**Il capitale tangibile resta tangibile.** L'asset di ricerca viene sommato anche agli
+*immateriali*, e questo non è un dettaglio tecnico: il rendimento sul capitale tangibile
+— il metro di Buffett della lettera 2007 — sottrae avviamento e immateriali dal capitale
+investito. Sommando l'asset in entrambi i posti, quel denominatore resta identico a
+prima. Una stima non deve entrare in una metrica definita sui tangibili. Il numeratore
+invece cambia (è l'EBIT rettificato), quindi il rendimento sui tangibili *sale*: è
+corretto, ed è la stessa ragione per cui See's Candies rendeva oltre il 200% — poco
+capitale fisico, molto reddito.
+
+**I punteggi delle due letture non sono confrontabili.** Le soglie di normalizzazione
+sono tarate su bilanci non rettificati. Con la R&S capitalizzata cambiano anche EBITDA,
+Interest Coverage e Debt/EBITDA, quindi il punteggio complessivo si sposta per ragioni
+metodologiche e non per un cambiamento dell'azienda. Il modo di usare l'opzione è
+lanciare l'analisi **due volte** e leggere la differenza, come per `--sector industrial`
+su una banca.
+
+### Quando la storia non basta
+
+Con vita utile 5 anni servono 5 esercizi di storia *oltre* il più vecchio analizzato, e
+yfinance ne espone 4-5 in tutto. Per gli anni mancanti si assume la R&S dell'esercizio
+più vecchio disponibile — ipotesi di stabilità, la più semplice da spiegare — e la cosa
+viene dichiarata fra i dati stimati. Sottostima l'asset di chi ha aumentato molto la
+ricerca; è il limite da tenere presente su `--rd-life 10`, dove la storia mancante è il
+doppio.
+
+### Perché questo, e non un profilo tech
+
+Un profilo di settore esiste quando **la struttura contabile rende le metriche standard
+prive di significato** — è il caso di banche, assicurazioni, REIT, utility regolate,
+E&P. Il tech non è in quella lista: il suo problema non è che ROIC e Owner Earnings non
+si possano calcolare, è che *una voce di costo è classificata male*. Quella si corregge,
+e la correzione vale per chiunque faccia ricerca — farmaceutica, industria, difesa — non
+per un'etichetta di settore. Undici profili GICS nasconderebbero il problema dentro
+soglie arbitrarie invece di risolverlo.
 
 ---
 
@@ -1231,6 +1333,14 @@ Berkshire, Alphabet — e non su un'ottimizzazione. Non coprono i casi di confin
 manager, gestori di mercati, società immobiliari, utility regolate — che finiscono nel
 profilo industriale e vanno letti con cautela o forzati a mano. E per i finanziari mancano i ratios di vigilanza:
 il giudizio sulla solidità patrimoniale poggia su proxy dichiarati, non sui numeri veri.
+
+**Sulla capitalizzazione della R&S.** La vita utile è una convenzione (5 anni software,
+10 farmaceutico), e il risultato ne dipende in modo diretto: raddoppiarla raddoppia circa
+il capitale imputato alla ricerca. Con 4-5 esercizi disponibili la storia della R&S non
+copre la vita utile, e gli anni mancanti vengono assunti pari al più vecchio disponibile:
+sottostima l'asset di chi ha aumentato molto la ricerca. I punteggi con e senza la
+rettifica non sono confrontabili fra loro, perché le soglie sono tarate su bilanci non
+rettificati.
 
 **Sul modello.** Tutte le soglie di punteggio, i pesi delle categorie e i default di
 valutazione sono **convenzioni ragionevoli**, non risultati di ottimizzazione. Sono

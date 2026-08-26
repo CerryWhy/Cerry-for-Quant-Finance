@@ -9,7 +9,14 @@ finanziario) tramite ``yfinance`` e calcola, anno per anno:
   in crescita per le metriche chiave.
 
 Il tutto viene aggregato in un punteggio 0-100 con pesi personalizzabili
-(default: 40% profittabilita', 30% consistenza, 30% solidita' di bilancio).
+(default: 40% profittabilita', 30% consistenza, 30% solidita' di bilancio), che dichiara
+anche la propria **copertura**: quale quota del peso previsto dal profilo ha davvero
+prodotto un valore, perche' un punteggio ottenuto per ridistribuzione dei pesi non e' la
+stessa informazione di uno completo.
+
+Con ``capitalize_rd=True`` la R&S viene trattata come investimento invece che come costo
+(metodo Damodaran): correzione necessaria per chi vive di ricerca, dove spesare tutto
+gonfia il ROIC e deprime gli Owner Earnings nella stessa direzione.
 
 Convenzioni usate nell'output:
 * ROIC / ROE / ROA / margini sono espressi in **punti percentuali** (es. 28.5 = 28.5%);
@@ -20,6 +27,8 @@ Uso da riga di comando::
 
     python quality_score.py            # analizza AAPL
     python quality_score.py MSFT KO    # analizza piu' ticker
+    python quality_score.py GOOGL --capitalize-rd            # R&S come investimento
+    python quality_score.py PFE --capitalize-rd --rd-life 10 # vita utile del farmaceutico
 
 Nota sui dati: yfinance espone tipicamente 4-5 esercizi annuali per ticker, non 10.
 Il modulo richiede fino a ``years`` esercizi e lavora con quelli effettivamente
@@ -85,6 +94,15 @@ NO_DEBT_COVERAGE = 999.0
 #: poco affidabile: e' costruito su una parte dell'impianto previsto dal profilo.
 LOW_COVERAGE = 0.60
 
+#: Vita utile convenzionale della R&S capitalizzata, in anni.
+#:
+#: Cinque anni e' la scelta di Damodaran per il software e per il tech in generale: e' il
+#: tempo entro cui un investimento in sviluppo esaurisce il proprio contributo economico.
+#: Non e' universale, e la differenza conta: per il farmaceutico si usano **10 anni** (un
+#: composto approvato genera ricavi per un decennio), per l'industriale pesante anche di
+#: piu'. Si cambia con ``rd_life`` (CLI: ``--rd-life``).
+DEFAULT_RD_LIFE = 5
+
 # Etichette alternative usate da yfinance per la stessa voce di bilancio.
 # L'ordine conta: la prima voce disponibile vince.
 INCOME_ALIASES: Dict[str, Sequence[str]] = {
@@ -106,6 +124,10 @@ INCOME_ALIASES: Dict[str, Sequence[str]] = {
         "Net Interest Income",
     ),
     "depreciation_income": ("Reconciled Depreciation",),
+    "research_development": (
+        "Research And Development", "Research Development",
+        "Research And Development Expenses",
+    ),
 }
 
 BALANCE_ALIASES: Dict[str, Sequence[str]] = {
@@ -527,6 +549,167 @@ def extract_fundamentals(
         fundamentals[year] = row
 
     return fundamentals
+
+
+# ---------------------------------------------------------------------------
+# 2-bis. Capitalizzazione della ricerca e sviluppo
+# ---------------------------------------------------------------------------
+
+
+def capitalize_research_development(
+    fundamentals: Dict[int, Dict[str, Optional[float]]],
+    life: int = DEFAULT_RD_LIFE,
+    quality: Optional[_DataQuality] = None,
+) -> Dict[int, Dict[str, Optional[float]]]:
+    """Tratta la R&S come investimento invece che come costo — l'approccio Damodaran.
+
+    Il principio contabile impone di spesare la ricerca nell'anno in cui viene
+    sostenuta. E' prudente e, per un'azienda che vive di ricerca, **sbagliato in due
+    direzioni contemporaneamente**:
+
+    * il **ROIC risulta gonfiato**, perche' il denominatore ignora il capitale
+      accumulato in decenni di ricerca. Un'azienda che ha speso 200 miliardi in
+      sviluppo mostra un capitale investito che non li contiene, e un rendimento su
+      quel capitale che sembra irripetibile;
+    * gli **Owner Earnings risultano depressi**, perche' la ricerca che serve a
+      *crescere* viene sottratta per intero dall'utile dell'anno, esattamente come il
+      CapEx di crescita che il modello invece separa gia' col metodo Greenwald.
+
+    I due effetti non si compensano: spingono nella stessa direzione la conclusione
+    "azienda straordinaria che pero' non genera cassa", che e' un artefatto contabile.
+
+    Il rimedio e' quello di Damodaran (*The Dark Side of Valuation*): si costruisce un
+    **asset di ricerca** ammortizzandolo linearmente su ``life`` anni::
+
+        asset di ricerca  = Σ  R&S(t-i) x (life - i) / life      per i = 0 ... life-1
+        ammortamento(t)   = Σ  R&S(t-i) / life                   per i = 1 ... life
+
+    e si rettifica il bilancio di conseguenza:
+
+    =========================  ====================================================
+    EBIT, reddito operativo    + R&S dell'anno - ammortamento
+    EBITDA                     + R&S dell'anno (non contiene ammortamenti)
+    Utile netto                + (R&S - ammortamento) x (1 - aliquota)
+    Patrimonio, capitale       + asset di ricerca
+    investito, totale attivo
+    Immateriali                + asset di ricerca
+    =========================  ====================================================
+
+    In regime stazionario (R&S costante) ammortamento e spesa coincidono: l'utile non
+    cambia, cambia solo il denominatore, e il ROIC scende al suo livello vero. Quando la
+    R&S cresce la rettifica sull'utile diventa positiva, ed e' il caso normale nel tech.
+
+    **Perche' l'asset finisce anche negli immateriali.** Il rendimento sul capitale
+    *tangibile* — il metro di Buffett della lettera 2007 — sottrae avviamento e
+    immateriali dal capitale investito. L'asset di ricerca e' un intangibile per
+    definizione: contarlo fra gli immateriali lo tiene fuori da quel calcolo, che resta
+    quindi identico a prima. Una stima non deve entrare in una metrica definita sui
+    tangibili.
+
+    **Effetto sugli Owner Earnings.** Non serve toccare D&A ne' CapEx: rettificato
+    l'utile netto, la formula degli Owner Earnings restituisce da sola
+    ``OE + (R&S - ammortamento) x (1 - aliquota)``, cioe' riconosce come investimento la
+    quota di ricerca che eccede il mantenimento dell'asset esistente. E' lo stesso
+    trattamento che il CapEx di crescita riceve gia'.
+
+    Args:
+        fundamentals: output di :func:`extract_fundamentals`. **Modificato sul posto.**
+        life: vita utile in anni. Cinque per il software e il tech, dieci per il
+            farmaceutico (vedi :data:`DEFAULT_RD_LIFE`).
+
+    Returns:
+        ``{anno: {"rd_expense", "rd_amortization", "research_asset",
+        "adjustment_pretax"}}``, vuoto se la voce di R&S non e' disponibile.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    life = max(1, int(life))
+    years_desc = sorted(fundamentals, reverse=True)
+
+    # Alcune fonti riportano i costi con segno negativo: conta il valore assoluto.
+    expense: Dict[int, float] = {}
+    for year in years_desc:
+        value = fundamentals[year].get("research_development")
+        if value is not None:
+            expense[year] = abs(value)
+
+    if not expense:
+        quality.note(
+            "Capitalizzazione della R&S richiesta ma la voce non e' presente nel conto "
+            "economico: nessuna rettifica applicata. E' il caso normale per le aziende "
+            "che non fanno ricerca, dove la rettifica non servirebbe."
+        )
+        return {}
+
+    oldest_year = min(expense)
+    oldest_value = expense[oldest_year]
+    average_expense = _mean(expense.values()) or 0.0
+    extrapolated: List[int] = []
+
+    def rd_of(year: int) -> float:
+        """R&S di un esercizio, con ripiego dichiarato quando la storia non arriva."""
+        if year in expense:
+            return expense[year]
+        extrapolated.append(year)
+        # Prima dell'esercizio piu' vecchio disponibile si assume la R&S di
+        # quell'esercizio: ipotesi di stabilita', la piu' semplice da spiegare. Per un
+        # buco interno alla serie si usa la media, che non introduce un trend.
+        return oldest_value if year < oldest_year else average_expense
+
+    diagnostics: Dict[int, Dict[str, Optional[float]]] = {}
+    for year in years_desc:
+        row = fundamentals[year]
+        if row.get("research_asset") is not None:
+            # Rettifica gia' applicata: applicarla due volte raddoppierebbe l'asset.
+            continue
+
+        asset = sum(rd_of(year - i) * (life - i) / life for i in range(life))
+        amortization = sum(rd_of(year - i) / life for i in range(1, life + 1))
+        rd_expense = expense.get(year, average_expense)
+        adjustment = rd_expense - amortization
+        tax_rate = row.get("tax_rate")
+        tax_rate = DEFAULT_TAX_RATE if tax_rate is None else tax_rate
+
+        for field in ("ebit", "operating_income"):
+            if row.get(field) is not None:
+                row[field] += adjustment
+        if row.get("ebitda") is not None:
+            row["ebitda"] += rd_expense
+        if row.get("net_income") is not None:
+            row["net_income"] += adjustment * (1.0 - tax_rate)
+        for field in ("equity", "invested_capital_calc", "total_assets"):
+            if row.get(field) is not None:
+                row[field] += asset
+        row["intangibles"] = (row.get("intangibles") or 0.0) + asset
+
+        row["rd_expense"] = rd_expense
+        row["rd_amortization"] = amortization
+        row["research_asset"] = asset
+        diagnostics[year] = {
+            "rd_expense": rd_expense,
+            "rd_amortization": amortization,
+            "research_asset": asset,
+            "adjustment_pretax": adjustment,
+        }
+
+    quality.note(
+        f"R&S capitalizzata e ammortizzata su {life} anni (metodo Damodaran): rettificati "
+        "redditivita' del capitale, margini, leva, patrimonio e Owner Earnings."
+    )
+    quality.note(
+        "Le soglie di punteggio sono tarate su bilanci non rettificati: i punteggi con e "
+        "senza capitalizzazione della R&S non sono direttamente confrontabili."
+    )
+    quality.note(
+        "Capitale tangibile invariato: l'asset di ricerca e' un intangibile e resta fuori "
+        "dal denominatore del rendimento sui tangibili."
+    )
+    if extrapolated:
+        quality.estimate(
+            f"Storia della R&S insufficiente per {len(set(extrapolated))} esercizi "
+            f"anteriori al {oldest_year}: assunta pari a quella del {oldest_year}. "
+            "Sottostima l'asset di chi ha aumentato molto la ricerca."
+        )
+    return diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -1125,6 +1308,8 @@ def calculate_quality_score(
     financials: Optional[Mapping[str, Any]] = None,
     sector: Optional[str] = None,
     mode: str = "standard",
+    capitalize_rd: bool = False,
+    rd_life: int = DEFAULT_RD_LIFE,
 ) -> Dict[str, Any]:
     """Calcola il Quality Score (0-100) di un'azienda.
 
@@ -1146,6 +1331,12 @@ def calculate_quality_score(
             Berkshire: rendimento ante imposte sul capitale **tangibile** al posto del
             ROIC, Debito / Owner Earnings al posto del Debt/EBITDA (che Buffett rifiuta
             apertamente), e soglie piu' severe su debito e continuita' degli utili.
+        capitalize_rd: se ``True`` la R&S viene trattata come investimento e non come
+            costo (vedi :func:`capitalize_research_development`). Cambia ROIC, margini,
+            patrimonio e Owner Earnings di chi fa ricerca; non ha effetto su chi non ne
+            fa, e viene ignorata su banche e assicurazioni.
+        rd_life: vita utile in anni della R&S capitalizzata. Default
+            :data:`DEFAULT_RD_LIFE` (5, adatta al software); 10 per il farmaceutico.
 
     Returns:
         Dizionario con ``quality_score``, ``rating``, ``category_scores`` (punteggio
@@ -1170,6 +1361,7 @@ def calculate_quality_score(
         "quality_score": None,
         "rating": "Non valutabile",
         "score_coverage": None,
+        "research_capitalization": None,
         "weights": weights_used,
         "category_scores": {},
         "metrics": {},
@@ -1229,6 +1421,34 @@ def calculate_quality_score(
         result["error"] = f"Nessun dato di bilancio utilizzabile per {ticker.upper()}."
         result["data_quality"] = quality.as_dict()
         return result
+
+    # --- Capitalizzazione della R&S -----------------------------------------
+    # Va applicata ai fondamentali prima di ogni metrica: rettificare qui una volta
+    # sola evita di duplicare la correzione in ROIC, margini e Owner Earnings.
+    if capitalize_rd:
+        if sector != sectors.INDUSTRIAL:
+            quality.note(
+                "Capitalizzazione della R&S ignorata: per banche e assicurazioni la "
+                "ricerca non e' una voce di costo materiale, e il capitale investito "
+                "non e' definito."
+            )
+        else:
+            # Una vita utile nulla o negativa non ha senso: la funzione la riporta a 1,
+            # e il risultato deve dichiarare la vita davvero usata, non quella chiesta.
+            if int(rd_life) < 1:
+                quality.note(
+                    f"Vita utile della R&S non valida ({rd_life}): usato 1 anno."
+                )
+            rd_life = max(1, int(rd_life))
+            rd_detail = capitalize_research_development(fundamentals, rd_life, quality)
+            if rd_detail:
+                result["research_capitalization"] = {
+                    "life": rd_life,
+                    "by_year": {
+                        year: {key: _round(value, 2) for key, value in detail.items()}
+                        for year, detail in rd_detail.items()
+                    },
+                }
 
     years_desc = sorted(fundamentals, reverse=True)[:years]
     fundamentals = {year: fundamentals[year] for year in years_desc}
@@ -1434,6 +1654,29 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
             )
         lines.append("")
 
+    # --- Capitalizzazione della R&S -----------------------------------------
+    research = result.get("research_capitalization")
+    if research:
+        lines.append("-" * width)
+        lines.append(f" CAPITALIZZAZIONE DELLA R&S (vita utile {research['life']} anni)")
+        lines.append("-" * width)
+        rd_years = sorted(research.get("by_year") or {}, reverse=True)
+        lines.append(f" {'':<24}" + "".join(f"{year:>11}" for year in rd_years))
+        for label, key in (
+            ("R&S spesata", "rd_expense"),
+            ("Ammortamento", "rd_amortization"),
+            ("Asset di ricerca", "research_asset"),
+            ("Rettifica all'EBIT", "adjustment_pretax"),
+        ):
+            cells = "".join(
+                f"{_fmt_big(research['by_year'][year].get(key)):>11}" for year in rd_years
+            )
+            lines.append(f" {label:<24}{cells}")
+        lines.append("")
+        lines.append(" La rettifica all'EBIT e' R&S dell'anno meno ammortamento: positiva")
+        lines.append(" quando la ricerca cresce, cioe' quando l'azienda sta investendo.")
+        lines.append("")
+
     # --- Tabella anno per anno ----------------------------------------------
     metrics = result.get("metrics") or {}
     if years:
@@ -1542,7 +1785,12 @@ if __name__ == "__main__":
     if "--self-test" in sys.argv:
         _self_test()
 
+    capitalize = "--capitalize-rd" in sys.argv
+    rd_life = DEFAULT_RD_LIFE
+    if "--rd-life" in sys.argv:
+        rd_life = int(sys.argv[sys.argv.index("--rd-life") + 1])
+
     for symbol in tickers:
         print(f"\nScarico i bilanci di {symbol.upper()} ...\n")
-        report = calculate_quality_score(symbol)
+        report = calculate_quality_score(symbol, capitalize_rd=capitalize, rd_life=rd_life)
         print(format_report(report))

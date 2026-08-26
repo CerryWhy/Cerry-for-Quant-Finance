@@ -323,3 +323,31 @@ def make_diversified_holding(ticker: str = "HOLDING") -> Dict[str, object]:
     calcolata.
     """
     return make_insurer(ticker, revenue_multiple=1 / 0.23, policy_liability_share=0.05)
+
+
+def make_rd_company(
+    ticker: str = "RICERCA",
+    *,
+    rd: Sequence[float],
+    revenue_multiple: float = 6.0,
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """Azienda che vive di ricerca: espone "Research And Development" nel conto economico.
+
+    ``rd`` e' la spesa di R&S dal piu' recente al piu' vecchio, come le colonne di
+    yfinance. Si assume che sia gia' spesata nel reddito operativo, che e' esattamente
+    cio' che fa il principio contabile e che la capitalizzazione va a correggere.
+    """
+    revenue = [value * revenue_multiple for value in rd]
+    base = make_financials(
+        ticker,
+        revenue=revenue,
+        operating_income=[value * 0.25 for value in revenue],
+        net_income=[value * 0.20 for value in revenue],
+        equity=[value * 0.55 for value in revenue],
+        debt=[value * 0.20 for value in revenue],
+        cash=[value * 0.30 for value in revenue],
+        shares=2e9,
+        years=years,
+    )
+    return add_row(base, "income_statement", "Research And Development", list(rd))

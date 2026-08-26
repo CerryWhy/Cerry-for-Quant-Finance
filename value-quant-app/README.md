@@ -18,7 +18,7 @@ value-quant-app/
 ├── docs/
 │   ├── COMANDI.md               guida rapida a tutte le opzioni
 │   └── METODOLOGIA.md           formule, soglie e come si leggono i numeri
-└── tests/                       61 test offline, nessuna rete richiesta
+└── tests/                       81 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
@@ -176,6 +176,14 @@ profittabilita', **30%** consistenza, **30%** solidita' — con soglie di normal
 esplicite riportate accanto a ogni componente. Se una componente o un'intera categoria
 non e' calcolabile, il suo peso si ridistribuisce sulle altre.
 
+Con `--capitalize-rd` la R&S viene trattata come investimento e non come costo (metodo
+Damodaran): si costruisce un asset di ricerca ammortizzato su 5 anni (10 col flag
+`--rd-life 10`, per il farmaceutico) e si rettificano ROIC, margini, patrimonio e Owner
+Earnings. Serve perche' spesare la ricerca gonfia il ROIC e deprime gli Owner Earnings
+nella stessa direzione, facendo sembrare chi fa ricerca "straordinario ma incapace di
+generare cassa". Il capitale **tangibile** resta invariato: l'asset di ricerca e' un
+intangibile e non entra nel metro di Buffett.
+
 Perche' la ridistribuzione non diventi una bugia, ogni categoria dichiara la **copertura**
 raggiunta — la quota di peso che ha davvero prodotto un valore — e il report la riporta
 accanto al punteggio (`su 5/6 componenti (65% del peso)`), marcandolo come parziale sotto
@@ -310,7 +318,7 @@ Le approssimazioni tipiche:
 
 ## Test
 
-61 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
+81 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
 
 ```bash
 python tests/test_quality_score.py    # metriche di bilancio e consistenza
@@ -318,6 +326,7 @@ python tests/test_valuation.py        # DCF, reverse DCF, EPV, WACC (verifiche a
 python tests/test_backtest.py         # point-in-time, metriche di rischio, sweep
 python tests/test_sectors.py          # banche e assicurazioni: metriche e metodi giusti
 python tests/test_buffett.py          # criteri di Berkshire, CapEx di mantenimento, filtro
+python tests/test_research.py         # capitalizzazione della R&S (verifiche analitiche)
 python tests/test_pipeline.py         # integrazione: i grafici sui dizionari reali
 ```
 
