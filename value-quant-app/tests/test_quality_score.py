@@ -171,6 +171,49 @@ def test_dati_mancanti_non_bloccano_il_calcolo():
     assert format_report(result)
 
 
+def test_copertura_del_punteggio():
+    """Un 92 costruito su tutto e un 92 costruito su meta' non sono la stessa cosa.
+
+    La ridistribuzione dei pesi tiene in piedi il punteggio quando manca un dato, ma ne
+    cambia il significato. La copertura e' la quota di **peso** che ha davvero prodotto
+    un valore: pesa le componenti invece di contarle, perche' perdere il ROIC (peso 0.35)
+    non equivale a perdere il margine lordo.
+    """
+    pieno = calculate_quality_score("ALFA", financials=FINANCIALS)
+    assert pieno["score_coverage"] == 1.0
+    for category in pieno["category_scores"].values():
+        assert category["coverage"] == 1.0
+        assert category["components_used"] == category["components_total"]
+
+    mutilato = dict(FINANCIALS)
+    mutilato["cash_flow"] = pd.DataFrame()
+    mutilato["balance_sheet"] = BALANCE_SHEET.drop(
+        index=["Total Debt", "Cash And Cash Equivalents",
+               "Current Assets", "Current Liabilities"]
+    )
+    mutilato["income_statement"] = INCOME_STATEMENT.drop(
+        index=["Gross Profit", "Operating Income", "Interest Expense"]
+    )
+    result = calculate_quality_score("ALFA", financials=mutilato)
+
+    # il punteggio esiste ancora, ed e' altissimo: e' esattamente il caso pericoloso
+    assert result["quality_score"] > 80
+    assert result["score_coverage"] < 0.60
+
+    bilancio = result["category_scores"]["balance_sheet"]
+    assert bilancio["score"] is None and bilancio["coverage"] == 0.0
+    assert bilancio["components_used"] == 0
+
+    # nella profittabilita' manca solo il ROIC: 6 componenti su 6 diventano 5, ma il
+    # peso perso e' 0.35, non 1/6
+    redditivita = result["category_scores"]["profitability"]
+    assert redditivita["components_used"] == redditivita["components_total"] - 1
+    assert abs(redditivita["coverage"] - (1 - 0.35)) < 1e-9
+
+    assert any("Copertura del punteggio" in voce for voce in result["data_quality"]["missing"])
+    assert "Copertura: 47%" in format_report(result)
+
+
 def test_nessun_dato_non_solleva_eccezioni():
     empty = {
         "ticker": "VUOTO", "income_statement": None, "balance_sheet": None,

@@ -36,6 +36,7 @@ from models.backtest import (  # noqa: E402
     sweep_parameters,
 )
 from models.quality_score import (  # noqa: E402
+    LOW_COVERAGE,
     calculate_quality_score,
     fetch_financials,
     format_report,
@@ -102,6 +103,7 @@ def _universe_row(analysis: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "ticker": analysis["ticker"],
         "quality_score": quality.get("quality_score"),
+        "score_coverage": quality.get("score_coverage"),
         "category_scores": quality.get("category_scores"),
         "sector": quality.get("sector"),
         "sector_label": quality.get("sector_label"),
@@ -129,7 +131,12 @@ def print_summary_table(rows: Sequence[Dict[str, Any]]) -> None:
         margin = row.get("margin_of_safety")
         price = row.get("price")
         fair_value = row.get("fair_value")
-        quality_text = f"{quality:.1f}" if quality is not None else "n/d"
+        # L'asterisco segnala un punteggio costruito su una parte delle componenti
+        # previste: due numeri vicini in questa colonna non sono confrontabili se uno
+        # dei due lo porta.
+        coverage = row.get("score_coverage")
+        partial = coverage is not None and coverage < LOW_COVERAGE
+        quality_text = f"{quality:.1f}{'*' if partial else ''}" if quality is not None else "n/d"
         price_text = f"{price:,.2f}" if price else "n/d"
         fair_text = f"{fair_value:,.2f}" if fair_value else "n/d"
         margin_text = f"{margin * 100:+.1f}%" if margin is not None else "n/d"
@@ -138,6 +145,9 @@ def print_summary_table(rows: Sequence[Dict[str, Any]]) -> None:
             f" {row['ticker']:<8}{quality_text:>9}{price_text:>12}"
             f"{fair_text:>13}{margin_text:>10}  {profile_text:<22}{row.get('verdict') or ''}"
         )
+    if any((row.get("score_coverage") or 1.0) < LOW_COVERAGE for row in ordered):
+        print(f" * punteggio parziale: meno del {LOW_COVERAGE:.0%} del peso previsto dal "
+              "profilo ha prodotto un valore.")
     print("=" * width + "\n")
 
 

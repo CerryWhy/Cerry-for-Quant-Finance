@@ -62,6 +62,106 @@ def test_settore_forzabile_a_mano():
     assert any("sconosciuto" in note for note in sconosciuto["data_quality"]["notes"])
 
 
+def test_marcatore_presente_ma_non_materiale_non_fa_una_banca():
+    """Il caso che ha motivato le soglie: Alphabet classificata come banca.
+
+    yfinance espone "Net Interest Income" anche per un industriale con la tesoreria
+    piena. Sulla sola presenza della voce il modello sceglieva il profilo bancario e
+    smetteva di calcolare ROIC e Owner Earnings — cioe' proprio le metriche che
+    servono per quell'azienda.
+    """
+    tech = synthetic.make_cash_rich_tech()
+    assert sectors.detect_sector(tech) == sectors.INDUSTRIAL
+
+    result = calculate_quality_score("TECH", financials=tech)
+    assert result["sector"] == sectors.INDUSTRIAL
+    assert result["metrics"]["roic"][2024] is not None
+    assert "owner_earnings" in result["metrics"]
+    # il marcatore scartato viene comunque dichiarato: e' la traccia della decisione
+    assert any("Margine di interesse presente" in nota
+               for nota in result["data_quality"]["notes"])
+
+
+def test_entrambe_le_soglie_bancarie_devono_scattare_dal_peso():
+    """Depositi al 10% dell'attivo e margine di interesse al 10% dei ricavi: non e' banca."""
+    banca = synthetic.make_bank()
+    attivo = list(banca["balance_sheet"].loc["Total Assets"])
+    ricavi = list(banca["income_statement"].loc["Total Revenue"])
+
+    marginale = synthetic.add_row(banca, "balance_sheet", "Total Deposits",
+                                  [v * 0.10 for v in attivo])
+    marginale = synthetic.add_row(marginale, "income_statement", "Net Interest Income",
+                                  [v * 0.10 for v in ricavi])
+    assert sectors.detect_sector(marginale) == sectors.INDUSTRIAL
+
+    # basta superare una delle due soglie perche' il profilo cambi
+    depositi_materiali = synthetic.add_row(marginale, "balance_sheet", "Total Deposits",
+                                           [v * 0.25 for v in attivo])
+    assert sectors.detect_sector(depositi_materiali) == sectors.BANK
+    interessi_materiali = synthetic.add_row(marginale, "income_statement",
+                                            "Net Interest Income",
+                                            [v * 0.35 for v in ricavi])
+    assert sectors.detect_sector(interessi_materiali) == sectors.BANK
+
+
+def test_holding_diversificata_resta_nel_profilo_assicurativo():
+    """Premi al 23% dei ricavi: il caso Berkshire, che tara la soglia sui premi."""
+    holding = synthetic.make_diversified_holding()
+    assert sectors.detect_sector(holding) == sectors.INSURANCE
+
+    result = calculate_quality_score("HOLDING", financials=holding)
+    assert result["sector"] == sectors.INSURANCE
+    # ed e' il punto: nel profilo industriale questa metrica non esisterebbe
+    assert result["consistency"]["book_value_per_share"]["growth_years_pct"] is not None
+
+
+def test_conglomerato_sceglie_il_marcatore_piu_pesante():
+    mista = synthetic.make_conglomerate()
+    quality = sectors._DataQuality()
+    assert sectors.detect_sector(mista, quality) == sectors.BANK
+    # la meta' che resta fuori dalle metriche va dichiarata, non nascosta
+    assert any("entrambi materiali" in nota for nota in quality.notes)
+
+
+def test_ripiego_sulla_presenza_solo_per_le_voci_inequivocabili():
+    """Senza l'aggregato di riferimento la materialita' non e' verificabile.
+
+    Depositi e premi bastano da soli (nessun industriale li espone), il margine di
+    interesse no: e' esattamente il marcatore che genera falsi positivi.
+    """
+    cieca = synthetic.drop_row(
+        synthetic.drop_row(synthetic.make_bank(), "balance_sheet", "Total Assets"),
+        "income_statement", "Total Revenue",
+    )
+    quality = sectors._DataQuality()
+    assert sectors.detect_sector(cieca, quality) == sectors.BANK
+    assert any("senza verifica del peso" in voce for voce in quality.estimated)
+
+    solo_interessi = synthetic.drop_row(
+        synthetic.make_cash_rich_tech(), "income_statement", "Total Revenue"
+    )
+    assert sectors.detect_sector(solo_interessi) == sectors.INDUSTRIAL
+
+
+def test_patrimonio_su_attivo_tarato_sulla_leva_non_ponderata():
+    """8.6% di patrimonio sull'attivo e' una banca solida, non una mediocre.
+
+    La soglia precedente (5% -> 0, 12% -> 100) era tarata come se il rapporto fosse un
+    CET1, che pero' divide per gli attivi **ponderati per il rischio** — circa la meta'
+    del totale. JPMorgan, con CET1 ~15%, prendeva 51 su 100. La scala corretta e'
+    5% -> 0, 9% -> 100.
+    """
+    solida = calculate_quality_score("SOLIDA", financials=synthetic.make_bank(equity_share=0.086))
+    componente = solida["category_scores"]["balance_sheet"]["components"]["equity_to_assets"]
+    assert abs(componente["value"] - 8.6) < 0.1
+    assert abs(componente["score"] - (8.6 - 5.0) / (9.0 - 5.0) * 100) < 0.5
+    assert componente["score"] > 85
+
+    # sotto il minimo di vigilanza il punteggio resta zero: la scala non e' stata ammorbidita
+    fragile = calculate_quality_score("FRAGILE", financials=synthetic.make_bank(equity_share=0.045))
+    assert fragile["category_scores"]["balance_sheet"]["components"]["equity_to_assets"]["score"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Il punto centrale: metriche diverse, non soglie diverse
 # ---------------------------------------------------------------------------
@@ -101,6 +201,10 @@ def test_metriche_bancarie_calcolate_correttamente():
     assert abs(metrics["efficiency_ratio"][year] - 56.25) < 0.1
     assert abs(metrics["loan_to_deposit"][year] - 0.433 / 0.733) < 0.01
     assert 0 <= result["quality_score"] <= 100
+    # bilancio bancario completo: tutte le componenti del profilo devono contribuire
+    assert result["score_coverage"] == 1.0
+    for categoria in result["category_scores"].values():
+        assert categoria["components_used"] == categoria["components_total"]
     assert format_report(result)
 
 

@@ -90,13 +90,22 @@ ampio possono volerci minuti.
 
 ### Banche, assicurazioni, holding
 
-Il profilo si riconosce da solo dalla struttura del bilancio:
+Il profilo si riconosce da solo dal **peso** delle voci di bilancio: banca se i depositi
+superano il 20% dell'attivo o il margine di interesse il 30% dei ricavi; assicurazione se
+i premi superano il 20% dei ricavi o le riserve tecniche il 10% dell'attivo.
 
 ```bash
 python run_analysis.py JPM BAC C                    # profilo bancario automatico
+python run_analysis.py BRK-B                        # assicurazione/holding automatica
 python run_analysis.py BRK-B --sector insurance     # forzato a mano
 python run_analysis.py JPM --sector industrial      # per vedere quanto cambia il metro
 ```
+
+La riga `Profilo di analisi` in testa al report dice quale profilo è stato applicato, e
+`QUALITA' DEL DATO` dice perché. Se un marcatore era presente ma troppo piccolo per
+contare — succede con gli industriali ricchi di liquidità, che espongono un margine di
+interesse dell'1% dei ricavi — la nota lo dichiara. Se il profilo scelto non convince,
+`--sector` lo forza.
 
 ### Grafici
 
@@ -153,7 +162,7 @@ python tests/test_pipeline.py
 Dentro una cella di notebook i comandi vogliono il `!` davanti:
 
 ```python
-!git clone -b claude/quality-score-module-va7vj7 https://github.com/CerryWhy/Cerry-for-Quant-Finance.git
+!git clone -b claude/quality-score-module-s3347v https://github.com/CerryWhy/Cerry-for-Quant-Finance.git
 %cd Cerry-for-Quant-Finance/value-quant-app
 !pip install -q yfinance
 !python run_analysis.py KO --buffett
@@ -198,7 +207,8 @@ Prima di credere a un risultato strano, controlla in quest'ordine:
 | 4 | `Owner Earnings base` | È positivo e plausibile rispetto agli utili che conosci? |
 | 5 | `QUALITA' DEL DATO` | Quante voci mancano? Su holding e conglomerati saranno molte |
 | 6 | `Profilo di analisi` | È quello giusto per quell'azienda? |
-| 7 | Punteggi per categoria | Quale trascina giù il totale, e ha senso per quel tipo di azienda? |
+| 7 | `Copertura` | Sotto il 60% il punteggio poggia su una parte delle metriche previste |
+| 8 | Punteggi per categoria | Quale trascina giù il totale, e ha senso per quel tipo di azienda? |
 
 **Il caso ciclico** merita un controllo a parte. Guarda la tabella *Metriche anno per anno*:
 se ROIC e margini degli ultimi due anni sono ai massimi della serie, stai normalizzando su
@@ -208,6 +218,13 @@ causa**. Non sono due conferme indipendenti: è una sola ipotesi contata due vol
 **Il margine di sicurezza esplode** quando il fair value tende a zero: si calcola
 dividendo per il fair value, quindi un `−13.000%` non significa "cara 130 volte", significa
 che il denominatore è quasi nullo.
+
+**Il punteggio altissimo su un bilancio incompleto** è il caso più insidioso, perché non
+sembra un errore. Ogni categoria riporta su quante componenti è calcolata (`su 5/6
+componenti (65% del peso)`) e il totale riporta la copertura complessiva. Quando le
+componenti mancanti sono le più severe — il ROIC, il debito — quelle che restano sono le
+migliori, e il punteggio sale invece di scendere. Nella tabella di riepilogo un asterisco
+accanto al punteggio segnala la stessa cosa: `91.9*` e `78.3` non sono confrontabili.
 
 ---
 

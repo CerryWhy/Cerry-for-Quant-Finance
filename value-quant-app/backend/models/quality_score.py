@@ -81,6 +81,10 @@ DEFAULT_TAX_RATE = 0.25
 #: Valore convenzionale usato per l'Interest Coverage quando non ci sono oneri finanziari.
 NO_DEBT_COVERAGE = 999.0
 
+#: Sotto questa quota di peso effettivamente contribuito il punteggio va segnalato come
+#: poco affidabile: e' costruito su una parte dell'impianto previsto dal profilo.
+LOW_COVERAGE = 0.60
+
 # Etichette alternative usate da yfinance per la stessa voce di bilancio.
 # L'ordine conta: la prima voce disponibile vince.
 INCOME_ALIASES: Dict[str, Sequence[str]] = {
@@ -1145,8 +1149,9 @@ def calculate_quality_score(
 
     Returns:
         Dizionario con ``quality_score``, ``rating``, ``category_scores`` (punteggio
-        e componenti per categoria), ``metrics`` (tutte le metriche anno per anno),
-        ``consistency``, ``averages`` e ``data_quality`` (dati stimati/mancanti e note).
+        e componenti per categoria), ``score_coverage`` (quota del peso previsto dal
+        profilo che ha davvero contribuito, 0-1), ``metrics`` (tutte le metriche anno
+        per anno), ``consistency``, ``averages`` e ``data_quality``.
         Non solleva eccezioni: in caso di dati insufficienti ``quality_score`` e' ``None``
         e il motivo e' descritto in ``data_quality`` ed ``error``.
     """
@@ -1164,6 +1169,7 @@ def calculate_quality_score(
         "years_analyzed": [],
         "quality_score": None,
         "rating": "Non valutabile",
+        "score_coverage": None,
         "weights": weights_used,
         "category_scores": {},
         "metrics": {},
@@ -1297,6 +1303,25 @@ def calculate_quality_score(
     else:
         result["error"] = "Dati insufficienti per calcolare un punteggio."
 
+    # --- Copertura del punteggio ---------------------------------------------
+    # Quanta parte dell'impianto previsto dal profilo ha davvero prodotto un numero.
+    # Le categorie del tutto assenti contano come copertura zero: la ridistribuzione
+    # dei pesi salva il punteggio, non la sua affidabilita'.
+    declared = sum(category["weight"] for category in categories.values())
+    if declared > 0:
+        covered = sum(
+            (category.get("coverage") or 0.0) * category["weight"]
+            for category in categories.values()
+        )
+        result["score_coverage"] = round(covered / declared, 3)
+        if result["score_coverage"] < LOW_COVERAGE:
+            quality.miss(
+                f"Copertura del punteggio {result['score_coverage']:.0%} del peso previsto "
+                f"dal profilo, sotto la soglia del {LOW_COVERAGE:.0%}: il punteggio resta "
+                "calcolato per ridistribuzione dei pesi, ma va letto come indicativo e "
+                "confrontato con cautela con quello di altri titoli."
+            )
+
     if len(years_desc) < 3:
         quality.note(
             f"Solo {len(years_desc)} esercizio/i disponibili: le metriche di consistenza "
@@ -1369,6 +1394,14 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
     lines.append(
         f" Punteggio finale: {_fmt(score, 1)} / 100   ->  {result.get('rating')}"
     )
+    # La copertura sta accanto al punteggio, non fra le note: due punteggi uguali con
+    # copertura diversa non sono confrontabili, e chi legge deve vederlo subito.
+    coverage = result.get("score_coverage")
+    if coverage is not None:
+        avviso = "" if coverage >= LOW_COVERAGE else "   <- punteggio parziale"
+        lines.append(
+            f" Copertura: {coverage:.0%} del peso previsto dal profilo{avviso}"
+        )
     years = result.get("years_analyzed") or []
     if years:
         lines.append(f" Esercizi analizzati: {len(years)} ({min(years)}-{max(years)})")
@@ -1383,9 +1416,16 @@ def format_report(result: Mapping[str, Any], max_notes: int = 12) -> str:
     lines.append(" PUNTEGGI PER CATEGORIA")
     lines.append("-" * width)
     for key, category in (result.get("category_scores") or {}).items():
+        coverage = category.get("coverage")
+        # La copertura sta sulla stessa riga del punteggio, non in una nota a pie'
+        # di pagina: e' parte di come si legge quel numero, non un dettaglio tecnico.
+        detail = (
+            f"   su {category.get('components_used')}/{category.get('components_total')}"
+            f" componenti ({coverage:.0%} del peso)" if coverage is not None else ""
+        )
         lines.append(
             f" {category.get('label', key):<30} peso {category['weight'] * 100:>5.1f}%   "
-            f"punteggio {_fmt(category['score'], 1):>6} / 100"
+            f"punteggio {_fmt(category['score'], 1):>6} / 100{detail}"
         )
         for component in category.get("components", {}).values():
             lines.append(

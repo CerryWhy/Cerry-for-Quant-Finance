@@ -91,10 +91,16 @@ Il problema e' che applicare il profilo sbagliato non produce un errore: produce
 | Valutazione | DCF Owner Earnings, EPV | Residual income, P/B giustificato | Residual income, P/B giustificato |
 | Sconto al | WACC | **costo dell'equity** | **costo dell'equity** |
 
-Il riconoscimento e' automatico e guarda la **struttura del bilancio** (presenza di
-depositi, di premi assicurativi), non l'etichetta di settore di Yahoo — che mette
-"Financial Services" su banche, assicurazioni, asset manager e borse, soggetti che
-vogliono trattamenti diversi. Si puo' forzare con `--sector bank|insurance|industrial`.
+Il riconoscimento e' automatico e guarda il **peso** delle voci di bilancio — banca se i
+depositi superano il 20% dell'attivo o il margine di interesse il 30% dei ricavi,
+assicurazione se i premi superano il 20% dei ricavi o le riserve tecniche il 10%
+dell'attivo — non l'etichetta di settore di Yahoo, che mette "Financial Services" su
+banche, assicurazioni, asset manager e borse, soggetti che vogliono trattamenti diversi.
+
+Conta il peso e non la semplice presenza della voce perche' yfinance riporta "Net
+Interest Income" anche per gli industriali con la tesoreria piena: sulla sola presenza di
+quella riga Alphabet finiva nel profilo bancario, dove ROIC e Owner Earnings non vengono
+nemmeno calcolati. Si puo' comunque forzare con `--sector bank|insurance|industrial`.
 
 ```bash
 python run_analysis.py JPM                      # profilo bancario riconosciuto da solo
@@ -167,8 +173,15 @@ e calcola, anno per anno:
 
 Il punteggio finale 0-100 e' la media pesata di tre categorie — default **40%**
 profittabilita', **30%** consistenza, **30%** solidita' — con soglie di normalizzazione
-esplicite riportate accanto a ogni componente. Se una categoria non e' calcolabile, il
-suo peso si ridistribuisce sulle altre.
+esplicite riportate accanto a ogni componente. Se una componente o un'intera categoria
+non e' calcolabile, il suo peso si ridistribuisce sulle altre.
+
+Perche' la ridistribuzione non diventi una bugia, ogni categoria dichiara la **copertura**
+raggiunta — la quota di peso che ha davvero prodotto un valore — e il report la riporta
+accanto al punteggio (`su 5/6 componenti (65% del peso)`), marcandolo come parziale sotto
+il 60%. Un 92 costruito su meta' delle metriche e' il caso piu' insidioso: le componenti
+che sopravvivono ai dati mancanti sono spesso le piu' generose, quindi il punteggio sale
+invece di scendere.
 
 ```bash
 python backend/models/quality_score.py AAPL MSFT

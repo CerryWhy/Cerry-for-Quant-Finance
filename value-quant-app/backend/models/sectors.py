@@ -47,6 +47,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 try:
     from .quality_score import (
+        BALANCE_ALIASES,
+        INCOME_ALIASES,
         _DataQuality,
         _mean,
         _round,
@@ -59,6 +61,8 @@ try:
     )
 except ImportError:  # esecuzione come script standalone
     from quality_score import (  # type: ignore[no-redef]
+        BALANCE_ALIASES,
+        INCOME_ALIASES,
         _DataQuality,
         _mean,
         _round,
@@ -73,10 +77,14 @@ except ImportError:  # esecuzione come script standalone
 
 __all__ = [
     "BANK",
+    "BANK_DEPOSIT_SHARE",
+    "BANK_INTEREST_SHARE",
     "BUFFETT",
     "BUFFETT_PROFILE",
     "INDUSTRIAL",
     "INSURANCE",
+    "INSURANCE_PREMIUM_SHARE",
+    "INSURANCE_RESERVE_SHARE",
     "PROFILES",
     "build_metrics",
     "detect_sector",
@@ -169,17 +177,92 @@ INSURANCE_BALANCE_ALIASES: Dict[str, Sequence[str]] = {
 # ---------------------------------------------------------------------------
 # Rilevamento del settore
 # ---------------------------------------------------------------------------
+#
+# La sola **presenza** di una voce non basta a decidere il profilo, e il caso che lo
+# dimostra e' Alphabet: yfinance espone "Net Interest Income" anche per gli industriali
+# con molta liquidita' parcheggiata (interessi attivi meno oneri finanziari), e su quel
+# solo indizio Alphabet veniva classificata come banca. Il marcatore deve **pesare**.
+
+#: Depositi / totale attivo oltre cui la raccolta e' la materia prima dell'azienda.
+#: JPMorgan sta al 61%, Goldman Sachs al 26%: una banca vera non ci arriva per caso.
+BANK_DEPOSIT_SHARE = 0.20
+
+#: Margine di interesse / ricavi totali oltre cui il mestiere e' l'intermediazione.
+#: E' la soglia che separa una banca (dove il margine e' la maggior parte del ricavo)
+#: da un industriale con la tesoreria piena (dove e' rumore all'1-2%).
+BANK_INTEREST_SHARE = 0.30
+
+#: Premi / ricavi totali oltre cui il mestiere e' la sottoscrizione di rischi.
+#:
+#: Deliberatamente piu' bassa delle due soglie bancarie, per due motivi:
+#:
+#: 1. il falso positivo che ha motivato queste soglie e' specifico del margine di
+#:    interesse; le voci di premio non compaiono per errore su chi non assicura;
+#: 2. il caso di riferimento del profilo e' Berkshire, che sta al ~23% (83 mld di premi
+#:    su 364 mld di ricavi nel 2023, il resto essendo ferrovie, energia, industria):
+#:    una soglia al 30% espellerebbe dal profilo assicurativo l'azienda per cui e'
+#:    stato scritto.
+INSURANCE_PREMIUM_SHARE = 0.20
+
+#: Riserve tecniche / totale attivo: seconda via al profilo assicurativo, per chi ha
+#: molti ricavi non tecnici e sarebbe scartato dalla soglia sui premi.
+INSURANCE_RESERVE_SHARE = 0.10
+
+
+def _median(values: Sequence[float]) -> Optional[float]:
+    """Mediana di una sequenza gia' ripulita dai ``None``."""
+    clean = sorted(values)
+    if not clean:
+        return None
+    middle = len(clean) // 2
+    if len(clean) % 2:
+        return clean[middle]
+    return (clean[middle - 1] + clean[middle]) / 2.0
+
+
+def _weight_share(
+    numerator_rows: Mapping[str, Any],
+    numerator_aliases: Sequence[str],
+    denominator_rows: Mapping[str, Any],
+    denominator_aliases: Sequence[str],
+) -> Optional[float]:
+    """Peso **mediano** di una voce sul suo aggregato, anno per anno.
+
+    La mediana e non l'ultimo esercizio: una riclassificazione o un anno anomalo non
+    devono spostare l'azienda in un altro profilo di analisi.
+
+    Restituisce ``None`` quando una delle due serie manca del tutto — che e' diverso da
+    "pesa poco", e chi chiama deve poter distinguere i due casi.
+    """
+    numerator, _ = _series_by_year(numerator_rows, numerator_aliases)
+    denominator, _ = _series_by_year(denominator_rows, denominator_aliases)
+    if not numerator or not denominator:
+        return None
+    ratios = [
+        numerator[year] / denominator[year]
+        for year in sorted(set(numerator) & set(denominator))
+        if denominator[year]
+    ]
+    return _median(ratios)
 
 
 def detect_sector(
     financials: Mapping[str, Any],
     quality: Optional[_DataQuality] = None,
 ) -> str:
-    """Riconosce il tipo di azienda dalla **struttura** del bilancio.
+    """Riconosce il tipo di azienda dal **peso** delle voci di bilancio.
 
-    L'ordine dei controlli conta: i depositi della clientela sono il marcatore piu'
-    inequivocabile di una banca; i premi assicurativi lo sono di un'assicurazione.
-    In assenza di entrambi si assume un'azienda operativa.
+    Due condizioni per la banca, alternative fra loro: depositi oltre il 20% dell'attivo
+    (la raccolta e' la materia prima) oppure margine di interesse oltre il 30% dei ricavi
+    (l'intermediazione e' il mestiere). Per l'assicurazione: premi oltre il 20% dei ricavi
+    oppure riserve tecniche oltre il 10% dell'attivo. In assenza di tutto, azienda
+    operativa: non si tira a indovinare.
+
+    Quando l'aggregato di riferimento manca (nessun totale attivo, nessun ricavo) la
+    materialita' non e' verificabile e si ripiega sulla presenza della voce, ma solo per
+    depositi e premi, che sono inequivocabili. **Non** per il margine di interesse, che
+    e' esattamente il marcatore che genera falsi positivi. Il ripiego viene dichiarato
+    in ``data_quality``.
 
     Non si usa il campo ``sector`` di Yahoo: mette "Financial Services" su banche,
     assicurazioni, asset manager e gestori di mercati, che richiedono metriche diverse,
@@ -190,23 +273,113 @@ def detect_sector(
     income_rows = _row_index(financials.get("income_statement"))
     balance_rows = _row_index(financials.get("balance_sheet"))
 
-    def has(rows: Mapping[str, Any], aliases: Sequence[str]) -> bool:
+    def present(rows: Mapping[str, Any], aliases: Sequence[str]) -> bool:
         values, _ = _series_by_year(rows, aliases)
         return bool(values)
 
-    if has(balance_rows, BANK_BALANCE_ALIASES["total_deposits"]) or has(
-        income_rows, BANK_INCOME_ALIASES["net_interest_income"]
+    deposit_share = _weight_share(
+        balance_rows, BANK_BALANCE_ALIASES["total_deposits"],
+        balance_rows, BALANCE_ALIASES["total_assets"],
+    )
+    interest_share = _weight_share(
+        income_rows, BANK_INCOME_ALIASES["net_interest_income"],
+        income_rows, INCOME_ALIASES["revenue"],
+    )
+    premium_share = _weight_share(
+        income_rows, INSURANCE_INCOME_ALIASES["premiums_earned"],
+        income_rows, INCOME_ALIASES["revenue"],
+    )
+    reserve_share = _weight_share(
+        balance_rows, INSURANCE_BALANCE_ALIASES["insurance_liabilities"],
+        balance_rows, BALANCE_ALIASES["total_assets"],
+    )
+    # Terza via: i sinistri pagati. Serve a chi espone i costi tecnici ma non i premi
+    # lordi, e resta un marcatore esclusivo del settore.
+    benefit_share = _weight_share(
+        income_rows, INSURANCE_INCOME_ALIASES["policy_benefits"],
+        income_rows, INCOME_ALIASES["revenue"],
+    )
+
+    bank_reasons: List[str] = []
+    bank_strength = 0.0
+    if deposit_share is not None and deposit_share > BANK_DEPOSIT_SHARE:
+        bank_reasons.append(f"depositi pari a {deposit_share:.0%} del totale attivo")
+        bank_strength = max(bank_strength, deposit_share)
+    if interest_share is not None and interest_share > BANK_INTEREST_SHARE:
+        bank_reasons.append(f"margine di interesse pari a {interest_share:.0%} dei ricavi")
+        bank_strength = max(bank_strength, interest_share)
+    if not bank_reasons and deposit_share is None and present(
+        balance_rows, BANK_BALANCE_ALIASES["total_deposits"]
     ):
-        quality.note("Settore rilevato: banca (presenza di depositi o margine di interesse).")
+        bank_reasons.append("presenza di depositi della clientela")
+        bank_strength = max(bank_strength, BANK_DEPOSIT_SHARE)
+        quality.estimate(
+            "Depositi presenti ma totale attivo non leggibile: profilo bancario assegnato "
+            "sulla presenza della voce, senza verifica del peso."
+        )
+
+    insurance_reasons: List[str] = []
+    insurance_strength = 0.0
+    if premium_share is not None and premium_share > INSURANCE_PREMIUM_SHARE:
+        insurance_reasons.append(f"premi pari a {premium_share:.0%} dei ricavi")
+        insurance_strength = max(insurance_strength, premium_share)
+    if reserve_share is not None and reserve_share > INSURANCE_RESERVE_SHARE:
+        insurance_reasons.append(f"riserve tecniche pari a {reserve_share:.0%} del totale attivo")
+        insurance_strength = max(insurance_strength, reserve_share)
+    if benefit_share is not None and benefit_share > INSURANCE_PREMIUM_SHARE:
+        insurance_reasons.append(f"sinistri e prestazioni pari a {benefit_share:.0%} dei ricavi")
+        insurance_strength = max(insurance_strength, benefit_share)
+    if not insurance_reasons and premium_share is None and present(
+        income_rows, INSURANCE_INCOME_ALIASES["premiums_earned"]
+    ):
+        insurance_reasons.append("presenza di premi assicurativi")
+        insurance_strength = max(insurance_strength, INSURANCE_PREMIUM_SHARE)
+        quality.estimate(
+            "Premi presenti ma ricavi totali non leggibili: profilo assicurativo assegnato "
+            "sulla presenza della voce, senza verifica del peso."
+        )
+
+    # Marcatori visti ma non materiali: vanno dichiarati, perche' sono la traccia del
+    # falso positivo evitato. Chi legge il report deve sapere perche' una societa' con
+    # una voce di margine di interesse **non** e' stata trattata come banca.
+    if not bank_reasons and interest_share is not None and interest_share > 0:
+        quality.note(
+            f"Margine di interesse presente ma pari a {interest_share:.1%} dei ricavi "
+            f"(soglia {BANK_INTEREST_SHARE:.0%}): non e' una banca. La voce compare anche "
+            "sugli industriali con molta liquidita' in tesoreria."
+        )
+    if not bank_reasons and deposit_share is not None and deposit_share > 0:
+        quality.note(
+            f"Depositi presenti ma pari a {deposit_share:.1%} del totale attivo "
+            f"(soglia {BANK_DEPOSIT_SHARE:.0%}): non sono la fonte di finanziamento "
+            "principale, profilo bancario non applicato."
+        )
+    if not insurance_reasons and premium_share is not None and premium_share > 0:
+        quality.note(
+            f"Premi presenti ma pari a {premium_share:.1%} dei ricavi "
+            f"(soglia {INSURANCE_PREMIUM_SHARE:.0%}): attivita' assicurativa non "
+            "prevalente, profilo assicurativo non applicato."
+        )
+
+    if bank_reasons and insurance_reasons:
+        # Conglomerato bancassicurativo: si sceglie il marcatore piu' pesante e lo si
+        # dichiara, perche' l'altra meta' dell'azienda resta fuori dalle metriche.
+        chosen = BANK if bank_strength >= insurance_strength else INSURANCE
+        quality.note(
+            "Marcatori bancari e assicurativi entrambi materiali ("
+            + "; ".join(bank_reasons + insurance_reasons)
+            + f"): applicato il profilo '{chosen}', quello del marcatore piu' pesante."
+        )
+        return chosen
+
+    if bank_reasons:
+        quality.note("Settore rilevato: banca (" + ", ".join(bank_reasons) + ").")
         return BANK
 
-    insurance_markers = (
-        has(income_rows, INSURANCE_INCOME_ALIASES["premiums_earned"])
-        or has(income_rows, INSURANCE_INCOME_ALIASES["policy_benefits"])
-        or has(balance_rows, INSURANCE_BALANCE_ALIASES["insurance_liabilities"])
-    )
-    if insurance_markers:
-        quality.note("Settore rilevato: assicurazione/holding (presenza di premi o riserve tecniche).")
+    if insurance_reasons:
+        quality.note(
+            "Settore rilevato: assicurazione/holding (" + ", ".join(insurance_reasons) + ")."
+        )
         return INSURANCE
 
     return INDUSTRIAL
@@ -542,11 +715,19 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "balance_sheet": {
                 "label": "Capitale e rischio di credito",
                 "components": {
-                    # Proxy della leva regolamentare: NON e' il CET1, che questa fonte
-                    # dati non espone.
+                    # Proxy della leva: NON e' il CET1, che questa fonte dati non espone.
+                    # Le soglie vanno lette su questa differenza. Il CET1 divide per gli
+                    # attivi **ponderati per il rischio**, che per una banca commerciale
+                    # sono circa la meta' del totale attivo: un titolo di Stato pesa zero,
+                    # un mutuo garantito il 35%. Quindi 12% di patrimonio sul totale
+                    # attivo corrisponderebbe a un CET1 intorno al 24%, un livello che
+                    # nessuna grande banca ha ne' cerca. JPMorgan sta all'8.6% di
+                    # patrimonio sull'attivo con un CET1 del ~15%, cioe' ampiamente sopra
+                    # i requisiti: con la vecchia scala (5 -> 0, 12 -> 100) prendeva 51,
+                    # un mediocre. La scala corretta e' 5% -> 0, 9% -> 100.
                     "equity_to_assets": {"label": "Patrimonio / attivo (%)",
                                          "source": ("average", "equity_to_assets"),
-                                         "low": 5.0, "high": 12.0, "weight": 0.40},
+                                         "low": 5.0, "high": 9.0, "weight": 0.40},
                     # Sotto 1 significa finanziata dai depositi, non dal mercato: e' la
                     # differenza fra una raccolta stabile e una che evapora in una crisi.
                     "loan_to_deposit": {"label": "Impieghi / depositi",
@@ -696,6 +877,18 @@ def score_categories(
     E' lo stesso motore per industriali, banche e assicurazioni: cambiano solo le
     metriche e le soglie dichiarate nel profilo. Le componenti non calcolabili vengono
     escluse e il loro peso ridistribuito sulle altre della stessa categoria.
+
+    La ridistribuzione tiene in piedi il punteggio quando manca un dato, ma ne cambia il
+    significato: un 47 che nasce da tutte le componenti previste e un 47 che nasce da una
+    sola non sono la stessa informazione. Per questo ogni categoria dichiara anche la
+    propria **copertura**:
+
+    ``components_used`` / ``components_total``
+        quante componenti hanno prodotto un punteggio, su quante ne prevede il profilo;
+    ``coverage``
+        quota del peso previsto che ha davvero contribuito (0-1). E' la misura piu'
+        onesta delle due, perche' pesa le componenti invece di contarle: perdere il
+        ROIC (peso 0.35) non equivale a perdere il margine lordo (peso 0.10).
     """
     quality = quality if quality is not None else _DataQuality()
     categories: Dict[str, Dict[str, Any]] = {}
@@ -728,6 +921,7 @@ def score_categories(
             quality.note(
                 f"Componente '{key}' non calcolabile: peso ridistribuito nella categoria."
             )
+        declared_weight = sum(c["weight"] for c in components.values())
         total_weight = sum(c["weight"] for c in usable.values())
         score = (
             sum(c["score"] * c["weight"] for c in usable.values()) / total_weight
@@ -736,6 +930,9 @@ def score_categories(
         categories[name] = {
             "label": definition["label"],
             "score": _round(score, 1),
+            "components_used": len(usable),
+            "components_total": len(components),
+            "coverage": _round(_safe_div(total_weight, declared_weight), 3),
             "components": components,
         }
     return categories

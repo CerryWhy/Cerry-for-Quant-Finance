@@ -87,7 +87,7 @@ significato no. È per questo che i profili esistono.
 | "Margine lordo" | Margine lordo | **NIM** (margine di interesse / attivo) | Rendimento degli investimenti |
 | "Margine operativo" | Reddito op. / ricavi | **Efficiency ratio** (costi/ricavi, inverso) | — |
 | Generazione di valore | Owner Earnings | Crescita del **patrimonio tangibile/azione** | Crescita del **patrimonio/azione** |
-| Solidità #1 | Debt/Equity | **Patrimonio / attivo** (proxy di CET1) | Patrimonio / attivo |
+| Solidità #1 | Debt/Equity | **Patrimonio / attivo** (proxy di leva, non CET1) | Patrimonio / attivo |
 | Solidità #2 | Debt/EBITDA | **Loan-to-Deposit** | Debt/Equity |
 | Solidità #3 | Interest Coverage | **Costo del credito** | — |
 | Solidità #4 | Current Ratio | — | — |
@@ -106,12 +106,23 @@ Riferimenti del profilo bancario:
 | ROA medio | 0.40% | 1.50% | 20% |
 | Cost/Income | 75% | 50% | 15% |
 | NIM / attivo | 1.20% | 3.50% | 10% |
-| Patrimonio / attivo | 5% | 12% | 40% (solidità) |
+| Patrimonio / attivo | 5% | 9% | 40% (solidità) |
 | Loan / Deposit | 1.10 | 0.70 | 30% |
 | Costo del credito | 1.50% | 0.20% | 30% |
 
 Il **loan-to-deposit sotto 1** significa finanziata dai depositi e non dal mercato: è la
 differenza fra una raccolta stabile e una che evapora in una crisi di fiducia.
+
+**Perché patrimonio/attivo si ferma al 9% e non al 12%.** Il rapporto è un proxy della
+leva, e va letto per quello che è: il CET1 divide il capitale per gli attivi *ponderati
+per il rischio*, che per una banca commerciale valgono circa la metà del totale — un
+titolo di Stato pesa zero, un mutuo residenziale garantito il 35%. Un patrimonio pari al
+12% del totale attivo corrisponderebbe quindi a un CET1 intorno al 24%: un livello che
+nessuna grande banca ha, né cerca, perché distruggerebbe il ROE. Con la scala precedente
+(5% → 0, 12% → 100) JPMorgan — 8.6% di patrimonio sull'attivo, CET1 ~15%, ampiamente
+sopra i requisiti — prendeva 51 su 100, cioè un giudizio da banca mediocre su una delle
+più capitalizzate del mondo. La scala 5% → 0, 9% → 100 le assegna 90. Il limite di fondo
+resta dichiarato: senza le segnalazioni di vigilanza il CET1 vero non è ricostruibile.
 
 ### Il profilo assicurativo e il problema di Berkshire
 
@@ -136,11 +147,42 @@ la soglia di variabilità accettata sul ROE (CV fino a 0.90 contro lo 0.60 indus
 
 ### Come viene riconosciuto il settore
 
-Dalla **struttura del bilancio**, non dall'etichetta:
+Dalla **struttura del bilancio**, non dall'etichetta. Ma non dalla semplice *presenza*
+di una voce: dal suo **peso**.
 
-1. presenza di **depositi** o di **margine di interesse** → banca;
-2. presenza di **premi assicurativi**, **riserve tecniche** o **sinistri** → assicurazione;
-3. altrimenti → industriale.
+| Profilo | Condizioni (alternative fra loro) |
+|---|---|
+| Banca | depositi > **20%** del totale attivo, oppure margine di interesse > **30%** dei ricavi |
+| Assicurazione | premi > **20%** dei ricavi, oppure riserve tecniche > **10%** dell'attivo, oppure sinistri e prestazioni > **20%** dei ricavi |
+| Industriale | nessuna delle precedenti |
+
+Ogni rapporto è calcolato come **mediana** dei valori annuali, non sull'ultimo esercizio:
+una riclassificazione o un anno anomalo non devono spostare l'azienda in un altro profilo.
+
+**Perché serve la materialità.** La versione precedente accettava la sola presenza di una
+riga, e su questo sbagliava un caso importante: yfinance riporta "Net Interest Income"
+anche per gli industriali con la tesoreria piena — sono gli interessi attivi sulla
+liquidità meno gli oneri finanziari — e Alphabet finiva così nel profilo bancario, dove
+ROIC e Owner Earnings *non vengono nemmeno calcolati*. Il marcatore c'era; pesava l'1%
+dei ricavi. Ora un marcatore visto ma non materiale viene scartato e la decisione
+compare in `data_quality`, così chi legge sa perché quella voce non ha cambiato profilo.
+
+**Perché le soglie non sono uguali fra loro.** Quella sui premi (20%) è più bassa delle
+due bancarie per due ragioni. La prima: il falso positivo è specifico del margine di
+interesse — le voci di premio non compaiono per errore su chi non assicura. La seconda:
+il caso di riferimento del profilo assicurativo è Berkshire, che nel 2023 ha 83 miliardi
+di premi su 364 di ricavi (il resto è ferrovia, energia, industria, distribuzione), cioè
+il 23%. Una soglia al 30% espellerebbe dal profilo assicurativo l'azienda per cui è
+stato scritto.
+
+**Quando l'aggregato manca.** Senza totale attivo o senza ricavi la materialità non è
+verificabile. In quel caso si ripiega sulla presenza della voce, ma solo per depositi e
+premi, che nessun industriale espone; **non** per il margine di interesse, che è proprio
+il marcatore ambiguo. Il ripiego viene dichiarato tra i dati stimati.
+
+**Conglomerati.** Se i marcatori bancari e assicurativi sono entrambi materiali si applica
+il profilo del marcatore più pesante e lo si dichiara: metà dell'azienda resta fuori dalle
+metriche, e chi legge deve saperlo.
 
 Non si usa il campo `sector` di Yahoo perché mette "Financial Services" su banche,
 assicurazioni, asset manager e gestori di mercati, che vogliono metriche diverse, ed è un
@@ -598,6 +640,33 @@ tutte in cima al file, in un unico posto, e ogni report le stampa accanto al val
 Se una componente non è calcolabile viene esclusa e il suo peso ridistribuito sulle
 altre della stessa categoria. Se un'intera categoria manca, il suo peso si redistribuisce
 sulle categorie rimaste, e la cosa viene annotata.
+
+**La copertura: quanto vale un punteggio ottenuto per ridistribuzione.** La
+ridistribuzione tiene in piedi il calcolo quando manca un dato, ma cambia il significato
+del numero: un 47 costruito su tutte le componenti previste e un 47 costruito su una sola
+non sono la stessa informazione, e sulla pagina sono indistinguibili. Per questo ogni
+categoria dichiara la propria copertura:
+
+```
+Profittabilita' / ROIC    peso 40.0%   punteggio 100.0 / 100   su 5/6 componenti (65% del peso)
+```
+
+La copertura è la quota di **peso** che ha davvero prodotto un valore, non la quota di
+componenti: perdere il ROIC (peso 0.35) non equivale a perdere il margine lordo (0.10),
+e contarle le farebbe sembrare uguali. Il report riporta anche la copertura complessiva
+accanto al punteggio finale, e la marca come parziale sotto il 60%:
+
+```
+ Punteggio finale: 91.9 / 100   ->  Eccellente
+ Copertura: 47% del peso previsto dal profilo   <- punteggio parziale
+```
+
+Un 91.9 costruito sul 47% dell'impianto è esattamente il caso pericoloso: il numero è
+altissimo perché le componenti sopravvissute sono le migliori, non perché l'azienda sia
+eccellente. Nella tabella di riepilogo dell'universo lo stesso punteggio compare con un
+asterisco, perché due valori vicini in quella colonna non sono confrontabili se uno dei
+due poggia su metà delle metriche. Il valore numerico è in `score_coverage` (0-1) e, per
+categoria, in `coverage`, `components_used`, `components_total`.
 
 ### 2.6 Come si legge il risultato
 
@@ -1155,9 +1224,12 @@ modello eredita questa fragilità. La sezione `data_quality` di ogni output elen
 stato stimato: leggerla non è opzionale.
 
 **Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni e
-aziende operative. Non copre casi di confine — asset manager, gestori di mercati,
-società immobiliari, utility regolate — che finiscono nel profilo industriale e vanno
-letti con cautela o forzati a mano. E per i finanziari mancano i ratios di vigilanza:
+aziende operative, e decide sulla materialità delle voci, non sulla loro presenza: le
+soglie (depositi 20% dell'attivo, margine di interesse 30% dei ricavi, premi 20% dei
+ricavi) sono anch'esse convenzioni, tarate su casi noti — JPMorgan, Goldman Sachs,
+Berkshire, Alphabet — e non su un'ottimizzazione. Non coprono i casi di confine — asset
+manager, gestori di mercati, società immobiliari, utility regolate — che finiscono nel
+profilo industriale e vanno letti con cautela o forzati a mano. E per i finanziari mancano i ratios di vigilanza:
 il giudizio sulla solidità patrimoniale poggia su proxy dichiarati, non sui numeri veri.
 
 **Sul modello.** Tutte le soglie di punteggio, i pesi delle categorie e i default di
