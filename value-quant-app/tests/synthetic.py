@@ -351,3 +351,65 @@ def make_rd_company(
         years=years,
     )
     return add_row(base, "income_statement", "Research And Development", list(rd))
+
+
+def make_reit(
+    ticker: str = "IMMOBILE",
+    *,
+    depreciation_share: float = 0.30,
+    payout_on_ffo: float = 0.75,
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """REIT: l'ammortamento degli immobili schiaccia l'utile netto, gli FFO no.
+
+    Numeri di riferimento (esercizio piu' recente): ricavi 2000, ammortamenti 600 (30%
+    dei ricavi), utile netto 200, quindi FFO 800 e margine FFO 40%. L'utile netto da'
+    un margine del 10% e un ROA dell'1.4%: sono i numeri che fanno sembrare mediocre un
+    REIT sano, ed e' esattamente cio' che il profilo esiste per evitare.
+
+    Gli immobili sono l'86% dell'attivo e compaiono come voce esplicita, quindi il
+    rilevamento automatico deve riconoscerlo senza euristiche.
+    """
+    count = len(years)
+    step = [1.0 + 0.05 * k for k in range(count)]
+
+    revenue = [2000e6 / s for s in step]
+    depreciation = [value * depreciation_share for value in revenue]
+    net_income = [value * 0.10 for value in revenue]
+    ffo = [n + d for n, d in zip(net_income, depreciation)]
+    assets = [14000e6 / s for s in step]
+
+    return {
+        "ticker": ticker,
+        "company_name": f"REIT {ticker}",
+        "currency": "USD",
+        "income_statement": frame({
+            "Total Revenue": revenue,
+            "Operating Income": [value * 0.30 for value in revenue],
+            "Pretax Income": [value * 0.11 for value in revenue],
+            "Tax Provision": [value * 0.01 for value in revenue],
+            "Net Income": net_income,
+            "Interest Expense": [value * 0.12 for value in revenue],
+        }, years),
+        "balance_sheet": frame({
+            "Total Assets": assets,
+            "Total Liabilities Net Minority Interest": [a * 0.52 for a in assets],
+            "Stockholders Equity": [a * 0.48 for a in assets],
+            # Voce immobiliare esplicita: l'86% dell'attivo.
+            "Real Estate": [a * 0.86 for a in assets],
+            "Net PPE": [a * 0.86 for a in assets],
+            "Total Debt": [a * 0.42 for a in assets],
+            "Cash And Cash Equivalents": [a * 0.02 for a in assets],
+            "Current Assets": [value * 0.20 for value in revenue],
+            "Current Liabilities": [value * 0.18 for value in revenue],
+            "Ordinary Shares Number": [300e6] * count,
+        }, years),
+        "cash_flow": frame({
+            "Depreciation And Amortization": depreciation,
+            "Capital Expenditure": [-value * 0.08 for value in revenue],
+            "Change In Working Capital": [value * 0.002 for value in revenue],
+            "Cash Dividends Paid": [-value * payout_on_ffo for value in ffo],
+        }, years),
+        "years": list(years),
+        "data_quality": {"notes": [], "estimated": [], "missing": []},
+    }

@@ -132,6 +132,12 @@ STRINGS: Dict[str, Tuple[str, str]] = {
     "metric_bvps": ("Patrimonio / azione", "Book value / share"),
     "metric_investment_yield": ("Rendimento investimenti %", "Investment yield %"),
     "metric_premiums": ("Premi", "Premiums earned"),
+    "metric_ffo_margin": ("FFO / ricavi %", "FFO / revenue %"),
+    "metric_affo_margin": ("AFFO / ricavi %", "AFFO / revenue %"),
+    "metric_ffops": ("FFO / azione", "FFO / share"),
+    "metric_ffo_payout": ("Dividendi / FFO %", "Dividends / FFO %"),
+    "metric_ffo_to_assets": ("FFO / attivo %", "FFO / assets %"),
+    "metric_debt_to_assets": ("Debito / attivo %", "Debt / assets %"),
     "col_quality_score": ("Quality Score", "Quality Score"),
     "col_profitability": ("Profittabilita'", "Profitability"),
     "col_consistency": ("Consistenza", "Consistency"),
@@ -225,6 +231,14 @@ HISTORY_METRICS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
         ("cost_of_risk", "metric_cost_of_risk", "%"),
         ("loan_to_deposit", "metric_loan_deposit", "x"),
     ),
+    "reit": (
+        ("ffo_margin", "metric_ffo_margin", "%"),
+        ("affo_margin", "metric_affo_margin", "%"),
+        ("ffo_per_share", "metric_ffops", "ratio"),
+        ("ffo_payout", "metric_ffo_payout", "%"),
+        ("debt_to_assets", "metric_debt_to_assets", "%"),
+        ("interest_coverage", "metric_interest_coverage", "x"),
+    ),
     "insurance": (
         ("combined_ratio", "metric_combined_ratio", "%"),
         ("roe", "metric_roe", "%"),
@@ -284,6 +298,15 @@ RADAR_LABELS: Dict[str, Tuple[str, str]] = {
     "investment_yield": ("Rendimento invest.", "Investment yield"),
     "bvps_growth_years": ("Crescita patrimonio", "Book value growth"),
     "roe_stability": ("Stabilita' ROE", "ROE stability"),
+    # REIT
+    "ffo_margin": ("Margine FFO", "FFO margin"),
+    "affo_margin": ("Margine AFFO", "AFFO margin"),
+    "ffo_to_assets": ("FFO/attivo", "FFO/assets"),
+    "ffo_payout": ("Payout FFO", "FFO payout"),
+    "ffops_growth_years": ("Crescita FFO", "FFO growth"),
+    "affo_stability": ("Stabilita' AFFO", "AFFO stability"),
+    "positive_ffo_years": ("Anni con FFO", "Positive FFO years"),
+    "debt_to_assets": ("Debito/attivo", "Debt/assets"),
 }
 
 

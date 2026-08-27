@@ -24,7 +24,7 @@ Senza ticker analizza `AAPL`. I ticker si separano con uno spazio, maiuscole o m
 | Flag | Argomento | Default | Cosa fa |
 |---|---|---|---|
 | `--buffett` | — | off | Criteri e tasso di sconto di Buffett, più la scorecard |
-| `--sector` | `industrial` \| `bank` \| `insurance` | auto | Forza il profilo invece del riconoscimento automatico |
+| `--sector` | `industrial` \| `bank` \| `insurance` \| `reit` | auto | Forza il profilo invece del riconoscimento automatico |
 | `--capitalize-rd` | flag | off | Tratta la R&S come investimento invece che come costo (Damodaran) |
 | `--rd-life` | intero | `5` | Vita utile della R&S capitalizzata: 5 software, 10 farmaceutico |
 | `--backtest` | — | off | Backtest della strategia (serve un minimo di **3 titoli**) |
@@ -89,6 +89,27 @@ python run_analysis.py KO PG WMT MCD JNJ --sweep                 # + griglia di 
 
 `--sweep` rifà il backtest per ogni cella della griglia (25 esecuzioni): su un universo
 ampio possono volerci minuti.
+
+### REIT e immobiliari
+
+Per un REIT l'ammortamento degli immobili e' una finzione contabile: un palazzo ben
+tenuto non perde valore. L'utile netto ne esce schiacciato, e con lui ROE e margine
+netto. Il profilo usa **FFO** e **AFFO**, le due misure del settore:
+
+```bash
+python run_analysis.py O SPG                        # profilo REIT automatico
+python run_analysis.py O --sector industrial        # per vedere quanto cambia il metro
+python run_analysis.py VNO --sector reit            # forzato a mano
+```
+
+Il riconoscimento scatta se gli immobili superano il 40% dell'attivo. Se il bilancio non
+espone una voce immobiliare separata, il ripiego e' euristico (immobilizzazioni oltre il
+70% dell'attivo **e** ammortamenti oltre il 20% dei ricavi) e viene dichiarato: su una
+utility o un industriale ad alta intensita' di capitale puo' sbagliare, e in quel caso si
+forza con `--sector industrial`.
+
+Nella valutazione il DCF sconta gli **AFFO** invece degli Owner Earnings, e l'EPV esce
+dalla sintesi: assume crescita zero, mentre i canoni seguono l'inflazione.
 
 ### Banche, assicurazioni, holding
 
@@ -176,6 +197,7 @@ python tests/test_backtest.py
 python tests/test_sectors.py
 python tests/test_buffett.py
 python tests/test_research.py
+python tests/test_reit.py
 python tests/test_pipeline.py
 ```
 

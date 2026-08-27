@@ -12,6 +12,7 @@ Esempi::
     python run_analysis.py AAPL --lang it    # etichette dei grafici in italiano
     python run_analysis.py JPM               # profilo bancario riconosciuto da solo
     python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
+    python run_analysis.py O SPG                     # profilo REIT: FFO e AFFO
     python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
     python run_analysis.py GOOGL --capitalize-rd          # R&S come investimento
     python run_analysis.py PFE --capitalize-rd --rd-life 10   # vita utile del farmaceutico

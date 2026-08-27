@@ -156,6 +156,13 @@ BALANCE_ALIASES: Dict[str, Sequence[str]] = {
     "tangible_book_value": ("Tangible Book Value", "Net Tangible Assets"),
     # Servono per il CapEx di mantenimento (rapporto immobilizzazioni/ricavi) e per il
     # rendimento sul capitale **tangibile**, che e' il metro di Buffett.
+    # Il marcatore del profilo REIT: gli immobili sono l'attivo, non un supporto
+    # all'attivita'. Quando la voce esiste ed e' materiale, il profilo cambia.
+    "real_estate": (
+        "Real Estate", "Net Real Estate", "Investment Properties",
+        "Real Estate Investments", "Real Estate Investment Property Net",
+        "Investment In Real Estate",
+    ),
     "net_ppe": (
         "Net PPE", "Net Property Plant And Equipment",
         "Property Plant And Equipment Net", "Gross PPE",
@@ -177,6 +184,16 @@ CASHFLOW_ALIASES: Dict[str, Sequence[str]] = {
     "change_in_working_capital": ("Change In Working Capital",),
     "free_cash_flow": ("Free Cash Flow",),
     "operating_cash_flow": ("Operating Cash Flow", "Cash Flow From Continuing Operating Activities"),
+    # Servono al profilo REIT: gli FFO escludono le plusvalenze da cessione immobili, e
+    # il payout sugli FFO si calcola sui dividendi effettivamente pagati.
+    "dividends_paid": (
+        "Cash Dividends Paid", "Common Stock Dividend Paid", "Dividends Paid",
+        "Cash Dividends Paid Direct",
+    ),
+    "gain_on_sale": (
+        "Gain Loss On Sale Of PPE", "Gain On Sale Of PPE",
+        "Gain Loss On Sale Of Business", "Net Gain Loss From Investments",
+    ),
 }
 
 

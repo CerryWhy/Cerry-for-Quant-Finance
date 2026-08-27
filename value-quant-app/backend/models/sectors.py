@@ -21,14 +21,23 @@ Applicare il profilo industriale a una banca non produce un errore: produce **nu
 plausibili e privi di significato**, che e' molto peggio. Questo modulo esiste per
 evitarlo.
 
-I tre profili
--------------
+I quattro profili
+-----------------
 ``INDUSTRIAL``  aziende operative: ROIC, Owner Earnings, leva finanziaria
 ``BANK``        banche commerciali: ROTCE, margine di interesse, efficienza, funding
 ``INSURANCE``   assicurazioni e holding: crescita del patrimonio per azione, combined ratio
+``REIT``        immobiliari: FFO e AFFO, perche' l'ammortamento non e' un costo reale
 
-Il rilevamento e' automatico e si basa sulla **struttura del bilancio** (la presenza
-dei depositi, dei premi assicurativi) e non sull'etichetta di settore di Yahoo, che
+Il caso REIT ha la stessa radice degli altri con una causa diversa. Per un'immobiliare il
+problema non e' il debito ma l'**ammortamento**: il principio contabile deprezza un
+fabbricato su 27,5 o 40 anni, mentre un immobile ben tenuto in una buona posizione non
+perde valore, e spesso lo guadagna. E' un costo che non corrisponde a nessuna uscita e a
+nessun logorio. Su un REIT sano l'utile netto puo' essere vicino a zero, e con lui ROE,
+ROA e margine netto: il profilo industriale non sbaglia il calcolo, restituisce
+un'azienda che sembra incapace di guadagnare.
+
+Il rilevamento e' automatico e si basa sul **peso delle voci di bilancio** (i depositi,
+i premi assicurativi, gli immobili) e non sull'etichetta di settore di Yahoo, che
 mette "Financial Services" su banche, assicurazioni, asset manager e borse — soggetti
 che vogliono trattamenti diversi.
 
@@ -48,6 +57,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 try:
     from .quality_score import (
         BALANCE_ALIASES,
+        CASHFLOW_ALIASES,
         INCOME_ALIASES,
         _DataQuality,
         _mean,
@@ -57,11 +67,13 @@ try:
         _score_linear,
         _series_by_year,
         _to_float,
+        calculate_balance_sheet_ratios,
         calculate_consistency,
     )
 except ImportError:  # esecuzione come script standalone
     from quality_score import (  # type: ignore[no-redef]
         BALANCE_ALIASES,
+        CASHFLOW_ALIASES,
         INCOME_ALIASES,
         _DataQuality,
         _mean,
@@ -71,6 +83,7 @@ except ImportError:  # esecuzione come script standalone
         _score_linear,
         _series_by_year,
         _to_float,
+        calculate_balance_sheet_ratios,
         calculate_consistency,
     )
 
@@ -79,6 +92,10 @@ __all__ = [
     "BANK",
     "BANK_DEPOSIT_SHARE",
     "BANK_INTEREST_SHARE",
+    "REIT",
+    "REIT_DA_SHARE",
+    "REIT_PPE_SHARE",
+    "REIT_PROPERTY_SHARE",
     "BUFFETT",
     "BUFFETT_PROFILE",
     "INDUSTRIAL",
@@ -97,6 +114,7 @@ __all__ = [
 INDUSTRIAL = "industrial"
 BANK = "bank"
 INSURANCE = "insurance"
+REIT = "reit"
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +226,18 @@ INSURANCE_PREMIUM_SHARE = 0.20
 #: molti ricavi non tecnici e sarebbe scartato dalla soglia sui premi.
 INSURANCE_RESERVE_SHARE = 0.10
 
+#: Immobili / totale attivo oltre cui gli immobili **sono** l'azienda, non un supporto.
+#: Prima via al profilo REIT, e la sola affidabile: richiede una voce immobiliare
+#: esplicita in bilancio.
+REIT_PROPERTY_SHARE = 0.40
+
+#: Seconda via, euristica, per chi classifica gli immobili dentro le immobilizzazioni
+#: generiche: immobilizzazioni oltre il 70% dell'attivo **e** ammortamenti oltre il 20%
+#: dei ricavi. Le due condizioni servono entrambe perche' la prima da sola cattura
+#: qualunque azienda ad alta intensita' di capitale.
+REIT_PPE_SHARE = 0.70
+REIT_DA_SHARE = 0.20
+
 
 def _median(values: Sequence[float]) -> Optional[float]:
     """Mediana di una sequenza gia' ripulita dai ``None``."""
@@ -255,8 +285,10 @@ def detect_sector(
     Due condizioni per la banca, alternative fra loro: depositi oltre il 20% dell'attivo
     (la raccolta e' la materia prima) oppure margine di interesse oltre il 30% dei ricavi
     (l'intermediazione e' il mestiere). Per l'assicurazione: premi oltre il 20% dei ricavi
-    oppure riserve tecniche oltre il 10% dell'attivo. In assenza di tutto, azienda
-    operativa: non si tira a indovinare.
+    oppure riserve tecniche oltre il 10% dell'attivo. Per il REIT: immobili oltre il 40%
+    dell'attivo, oppure immobilizzazioni oltre il 70% dell'attivo **e** ammortamenti
+    oltre il 20% dei ricavi. In assenza di tutto, azienda operativa: non si tira a
+    indovinare.
 
     Quando l'aggregato di riferimento manca (nessun totale attivo, nessun ricavo) la
     materialita' non e' verificabile e si ripiega sulla presenza della voce, ma solo per
@@ -272,6 +304,7 @@ def detect_sector(
 
     income_rows = _row_index(financials.get("income_statement"))
     balance_rows = _row_index(financials.get("balance_sheet"))
+    cash_rows = _row_index(financials.get("cash_flow"))
 
     def present(rows: Mapping[str, Any], aliases: Sequence[str]) -> bool:
         values, _ = _series_by_year(rows, aliases)
@@ -382,6 +415,43 @@ def detect_sector(
         )
         return INSURANCE
 
+    # --- REIT ---------------------------------------------------------------
+    # Si controlla dopo banche e assicurazioni perche' un REIT non ha ne' depositi ne'
+    # premi: nessun conflitto possibile.
+    property_share = _weight_share(
+        balance_rows, BALANCE_ALIASES["real_estate"],
+        balance_rows, BALANCE_ALIASES["total_assets"],
+    )
+    if property_share is not None and property_share > REIT_PROPERTY_SHARE:
+        quality.note(
+            f"Settore rilevato: REIT/immobiliare (immobili pari a {property_share:.0%} "
+            "del totale attivo)."
+        )
+        return REIT
+
+    # Ripiego euristico per chi non espone una voce immobiliare separata: molte
+    # immobilizzazioni **e** molti ammortamenti. Serve la congiunzione, perche' la sola
+    # intensita' di capitale descrive anche utility, telecom e industria pesante.
+    ppe_share = _weight_share(
+        balance_rows, BALANCE_ALIASES["net_ppe"],
+        balance_rows, BALANCE_ALIASES["total_assets"],
+    )
+    da_share = _weight_share(
+        cash_rows, CASHFLOW_ALIASES["d_and_a"],
+        income_rows, INCOME_ALIASES["revenue"],
+    )
+    if (
+        ppe_share is not None and ppe_share > REIT_PPE_SHARE
+        and da_share is not None and da_share > REIT_DA_SHARE
+    ):
+        quality.note(
+            f"Settore rilevato: REIT/immobiliare per via indiretta (immobilizzazioni "
+            f"{ppe_share:.0%} dell'attivo, ammortamenti {da_share:.0%} dei ricavi): "
+            "nessuna voce immobiliare esplicita in bilancio. Se e' una utility o un "
+            "industriale ad alta intensita' di capitale, forzare con --sector industrial."
+        )
+        return REIT
+
     return INDUSTRIAL
 
 
@@ -398,11 +468,13 @@ def extract_sector_fundamentals(
 ) -> Dict[int, Dict[str, Optional[float]]]:
     """Arricchisce i fondamentali di base con le voci proprie del settore.
 
-    Modifica ``fundamentals`` sul posto e lo restituisce. Per il profilo industriale
-    non fa nulla: le voci servono gia' tutte.
+    Modifica ``fundamentals`` sul posto e lo restituisce. Per i profili industriale e
+    REIT non fa nulla: le voci servono gia' tutte.
     """
     quality = quality if quality is not None else _DataQuality()
-    if sector == INDUSTRIAL:
+    # Industriali e REIT usano le voci di bilancio ordinarie: il profilo REIT cambia
+    # quali metriche si calcolano (FFO invece dell'utile netto), non quali righe servono.
+    if sector in (INDUSTRIAL, REIT):
         return fundamentals
 
     income_rows = _row_index(financials.get("income_statement"))
@@ -582,6 +654,162 @@ def _insurance_metrics(
     }
 
 
+def _reit_metrics(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: _DataQuality,
+) -> Dict[str, Dict[int, Optional[float]]]:
+    """Metriche immobiliari: FFO, AFFO, payout, leva sul valore degli immobili.
+
+    Perche' l'utile netto di un REIT non dice niente
+    -----------------------------------------------
+    L'ammortamento di un immobile e' una finzione contabile. Il principio impone di
+    deprezzare un fabbricato su 27,5 o 40 anni, ma un immobile ben tenuto in una buona
+    posizione **non perde valore nel tempo**: spesso lo guadagna. L'ammortamento resta
+    quindi un costo che non corrisponde ad alcuna uscita e ad alcun logorio economico.
+
+    La conseguenza e' che su un REIT sano l'utile netto puo' essere vicino a zero, e con
+    lui ROE, ROA e margine netto. Applicare il profilo industriale a un REIT non produce
+    un errore: produce un'azienda che sembra incapace di guadagnare. E' lo stesso
+    problema del profilo bancario, con un'altra causa.
+
+    Le due metriche del settore
+    ---------------------------
+    **FFO** (Funds From Operations, definizione NAREIT) rimette al loro posto le poste
+    non economiche::
+
+        FFO = Utile netto
+            + Ammortamenti sugli immobili
+            - Plusvalenze da cessione di immobili
+
+    Le plusvalenze si escludono perche' vendere un palazzo non e' l'attivita' ricorrente
+    di un REIT: gonfierebbe l'anno della vendita e lascerebbe un buco l'anno dopo.
+
+    **AFFO** (Adjusted FFO) toglie dagli FFO quello che serve a tenere in piedi gli
+    immobili::
+
+        AFFO = FFO - CapEx
+
+    ed e' la misura che paga il dividendo — l'equivalente per un REIT degli Owner
+    Earnings, e per la stessa ragione: sottrae il capitale che l'azienda **deve**
+    reinvestire per restare dov'e'.
+
+    Perche' qui il metodo Greenwald non si usa
+    ------------------------------------------
+    Il profilo industriale separa il CapEx di mantenimento da quello di crescita
+    moltiplicando il rapporto immobilizzazioni/ricavi per l'incremento dei ricavi. Su un
+    REIT quel rapporto vale **6 o 7** (servono sei euro di immobili per un euro di
+    canone annuo) contro lo 0,3-1,0 di un industriale. Il risultato e' che qualunque
+    crescita dei ricavi assorbe, sulla carta, piu' CapEx di quanto l'azienda ne spenda:
+    il CapEx di mantenimento risulta **zero** e gli AFFO coincidono con gli FFO.
+
+    Non e' un dettaglio di taratura: l'AFFO e' la metrica che dice se il dividendo e'
+    coperto, e farla coincidere con gli FFO significa dichiarare coperto un dividendo
+    che potrebbe non esserlo. Un AFFO sovrastimato e' piu' pericoloso di uno prudente,
+    quindi qui si sottrae il **CapEx totale** — che include lo sviluppo, e va letto per
+    quello che e': una stima prudenziale, dichiarata.
+
+    Limiti dichiarati
+    -----------------
+    L'ammortamento disponibile e' quello **totale** del rendiconto, non la sola quota
+    immobiliare: per un REIT la differenza e' minima (gli immobili sono l'attivo), ma
+    e' un'approssimazione e viene segnalata. Le plusvalenze da cessione spesso non
+    compaiono come voce separata: quando mancano, gli FFO le includono e sono
+    sovrastimati negli anni di dismissioni importanti.
+    """
+    ratios = calculate_balance_sheet_ratios(fundamentals, quality)
+
+    quality.estimate(
+        "FFO calcolati con l'ammortamento totale del rendiconto: la sola quota "
+        "immobiliare non e' esposta separatamente. Su un REIT la differenza e' minima, "
+        "ma resta un'approssimazione."
+    )
+    quality.estimate(
+        "AFFO calcolati sottraendo il CapEx totale: la quota ricorrente non e' esposta "
+        "separatamente, e il metodo Greenwald su un REIT darebbe zero (le "
+        "immobilizzazioni valgono 6-7 volte i ricavi). Stima prudenziale: chi sta "
+        "sviluppando ha AFFO piu' bassi del vero."
+    )
+
+    ffo: Dict[int, Optional[float]] = {}
+    affo: Dict[int, Optional[float]] = {}
+    plusvalenze_assenti = False
+    for year, row in fundamentals.items():
+        net_income = row.get("net_income")
+        d_and_a = row.get("d_and_a")
+        if net_income is None or d_and_a is None:
+            ffo[year] = affo[year] = None
+            if net_income is None:
+                quality.miss(f"{year}: utile netto mancante, FFO non calcolabili.")
+            else:
+                quality.miss(f"{year}: ammortamenti mancanti, FFO non calcolabili.")
+            continue
+        gain = row.get("gain_on_sale")
+        if gain is None:
+            plusvalenze_assenti = True
+            gain = 0.0
+        value = net_income + abs(d_and_a) - gain
+        ffo[year] = value
+        capex = row.get("capex")
+        affo[year] = value - abs(capex) if capex is not None else None
+
+    if plusvalenze_assenti:
+        quality.miss(
+            "Plusvalenze da cessione di immobili non esposte come voce separata: gli FFO "
+            "non le escludono e sono sovrastimati negli anni con dismissioni rilevanti."
+        )
+
+    def per_share(series: Mapping[int, Optional[float]]) -> Dict[int, Optional[float]]:
+        return {
+            year: _safe_div(series.get(year), fundamentals[year].get("shares_outstanding"))
+            for year in fundamentals
+        }
+
+    return {
+        "ffo": dict(ffo),
+        "affo": dict(affo),
+        "ffo_per_share": per_share(ffo),
+        "affo_per_share": per_share(affo),
+        "ffo_margin": {
+            year: _safe_div(ffo.get(year), fundamentals[year].get("revenue"), scale=100.0)
+            for year in fundamentals
+        },
+        "affo_margin": {
+            year: _safe_div(affo.get(year), fundamentals[year].get("revenue"), scale=100.0)
+            for year in fundamentals
+        },
+        # Rendimento degli immobili: gli FFO che il patrimonio investito produce. E'
+        # l'equivalente del ROA per chi non puo' usare l'utile netto.
+        "ffo_to_assets": {
+            year: _safe_div(ffo.get(year), fundamentals[year].get("total_assets"), scale=100.0)
+            for year in fundamentals
+        },
+        # Payout sugli FFO: sopra il 90% il dividendo non ha margine. I REIT americani
+        # devono distribuire il 90% del reddito imponibile per mantenere lo status
+        # fiscale, quindi un payout alto e' strutturale — ma sugli FFO, non sull'utile.
+        "ffo_payout": {
+            year: _safe_div(
+                abs(fundamentals[year]["dividends_paid"])
+                if fundamentals[year].get("dividends_paid") else None,
+                ffo.get(year) if (ffo.get(year) or 0) > 0 else None,
+                scale=100.0,
+            )
+            for year in fundamentals
+        },
+        # Leva sul valore di libro degli immobili: il proxy del loan-to-value, che il
+        # settore guarda piu' del Debt/Equity.
+        "debt_to_assets": _series(
+            fundamentals, lambda r: _safe_div(r.get("total_debt"), r.get("total_assets"), scale=100.0)
+        ),
+        "debt_to_ebitda": ratios["debt_to_ebitda"],
+        "interest_coverage": ratios["interest_coverage"],
+        "revenue": _series(fundamentals, lambda r: r.get("revenue")),
+        "net_income": _series(fundamentals, lambda r: r.get("net_income")),
+        "total_assets": _series(fundamentals, lambda r: r.get("total_assets")),
+        "d_and_a": _series(fundamentals, lambda r: abs(r["d_and_a"]) if r.get("d_and_a") else None),
+        "capex": _series(fundamentals, lambda r: abs(r["capex"]) if r.get("capex") else None),
+    }
+
+
 def build_metrics(
     fundamentals: Mapping[int, Mapping[str, Optional[float]]],
     sector: str,
@@ -593,6 +821,8 @@ def build_metrics(
         return _bank_metrics(fundamentals, quality)
     if sector == INSURANCE:
         return _insurance_metrics(fundamentals, quality)
+    if sector == REIT:
+        return _reit_metrics(fundamentals, quality)
     raise ValueError(f"build_metrics non si applica al settore '{sector}'.")
 
 
@@ -797,6 +1027,74 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+
+    REIT: {
+        "label": "REIT / immobiliare",
+        "categories": {
+            "profitability": {
+                "label": "Redditivita' degli immobili",
+                "components": {
+                    # Il margine sugli FFO e' il metro primario: quanta parte del canone
+                    # incassato resta dopo i costi di gestione e gli interessi.
+                    "ffo_margin": {"label": "FFO / ricavi medio (%)",
+                                   "source": ("average", "ffo_margin"),
+                                   "low": 20.0, "high": 55.0, "weight": 0.30},
+                    # AFFO: come sopra, ma al netto del capitale che serve a mantenere
+                    # gli immobili. E' cio' che paga davvero il dividendo.
+                    "affo_margin": {"label": "AFFO / ricavi medio (%)",
+                                    "source": ("average", "affo_margin"),
+                                    "low": 15.0, "high": 45.0, "weight": 0.30},
+                    # Rendimento del patrimonio investito, l'equivalente del ROA per chi
+                    # non puo' usare l'utile netto.
+                    "ffo_to_assets": {"label": "FFO / totale attivo (%)",
+                                      "source": ("average", "ffo_to_assets"),
+                                      "low": 3.0, "high": 9.0, "weight": 0.25},
+                    # Sopra il 90% il dividendo non ha margine di sicurezza. Scala
+                    # inversa: meno e' meglio.
+                    "ffo_payout": {"label": "Dividendi / FFO medio (%)",
+                                   "source": ("average", "ffo_payout"),
+                                   "low": 100.0, "high": 65.0, "weight": 0.15},
+                },
+            },
+            "consistency": {
+                "label": "Consistenza",
+                "components": {
+                    # Il metro con cui il settore misura se stesso: gli FFO per azione
+                    # che crescono anno dopo anno.
+                    "ffops_growth_years": {"label": "Anni di crescita degli FFO/azione (%)",
+                                           "source": ("consistency", "ffo_per_share", "growth_years_pct"),
+                                           "low": 40.0, "high": 100.0, "weight": 0.30},
+                    "affo_stability": {"label": "Coeff. di variazione margine AFFO",
+                                       "source": ("consistency", "affo_margin", "coefficient_of_variation"),
+                                       "low": 0.40, "high": 0.05, "weight": 0.25},
+                    "positive_ffo_years": {"label": "Anni con FFO positivi (%)",
+                                           "source": ("consistency", "ffo", "positive_years_pct"),
+                                           "low": 70.0, "high": 100.0, "weight": 0.25},
+                    "revenue_growth_years": {"label": "Anni di crescita dei ricavi (%)",
+                                             "source": ("consistency", "revenue", "growth_years_pct"),
+                                             "low": 40.0, "high": 100.0, "weight": 0.20},
+                },
+            },
+            "balance_sheet": {
+                "label": "Leva e copertura",
+                "components": {
+                    # Proxy del loan-to-value: il settore guarda questo, non il
+                    # Debt/Equity, perche' il patrimonio contabile e' deprezzato da
+                    # ammortamenti che non riflettono il valore degli immobili.
+                    "debt_to_assets": {"label": "Debito / totale attivo (%)",
+                                       "source": ("average", "debt_to_assets"),
+                                       "low": 60.0, "high": 30.0, "weight": 0.40},
+                    # Il covenant piu' comune nel settore: sotto 6x e' considerato sano.
+                    "debt_to_ebitda": {"label": "Debt/EBITDA medio",
+                                       "source": ("average", "debt_to_ebitda"),
+                                       "low": 8.00, "high": 4.50, "weight": 0.35},
+                    "interest_coverage": {"label": "Interest Coverage medio",
+                                          "source": ("average", "interest_coverage"),
+                                          "low": 1.80, "high": 5.00, "weight": 0.25},
+                },
+            },
+        },
+    },
 }
 
 #: Metriche su cui calcolare le statistiche di consistenza, per settore.
@@ -807,6 +1105,8 @@ CONSISTENCY_TARGETS: Dict[str, Tuple[str, ...]] = {
            "tangible_book_per_share", "revenue", "net_income"),
     INSURANCE: ("roe", "rotce", "combined_ratio", "book_value_per_share",
                 "premiums_earned", "net_income", "investment_yield"),
+    REIT: ("ffo", "affo", "ffo_per_share", "affo_per_share", "ffo_margin",
+           "affo_margin", "ffo_to_assets", "revenue", "net_income"),
 }
 
 #: Metriche di cui calcolare la media, per settore.
@@ -820,6 +1120,9 @@ AVERAGE_TARGETS: Dict[str, Tuple[str, ...]] = {
     INSURANCE: ("roe", "roa", "rotce", "combined_ratio", "investment_yield",
                 "equity_to_assets", "debt_to_equity", "book_value_per_share",
                 "tangible_book_per_share"),
+    REIT: ("ffo", "affo", "ffo_per_share", "affo_per_share", "ffo_margin", "affo_margin",
+           "ffo_to_assets", "ffo_payout", "debt_to_assets", "debt_to_ebitda",
+           "interest_coverage"),
 }
 
 #: Righe della tabella anno per anno nel report: (etichetta, metrica, formato).
@@ -847,6 +1150,20 @@ TABLE_ROWS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
         ("Impieghi / depositi", "loan_to_deposit", "ratio"),
         ("Costo del credito %", "cost_of_risk", "pct"),
         ("Patrimonio tang./azione", "tangible_book_per_share", "ratio"),
+    ),
+    REIT: (
+        ("Ricavi", "revenue", "big"), ("Utile netto", "net_income", "big"),
+        ("FFO", "ffo", "big"), ("AFFO", "affo", "big"),
+        ("FFO / azione", "ffo_per_share", "ratio"),
+        ("AFFO / azione", "affo_per_share", "ratio"),
+        ("FFO / ricavi %", "ffo_margin", "pct"),
+        ("AFFO / ricavi %", "affo_margin", "pct"),
+        ("FFO / attivo %", "ffo_to_assets", "pct"),
+        ("Dividendi / FFO %", "ffo_payout", "pct"),
+        ("Debito / attivo %", "debt_to_assets", "pct"),
+        ("Debt / EBITDA", "debt_to_ebitda", "ratio"),
+        ("Interest Coverage", "interest_coverage", "ratio"),
+        ("Ammortamenti", "d_and_a", "big"), ("CapEx totale", "capex", "big"),
     ),
     INSURANCE: (
         ("Premi", "premiums_earned", "big"), ("Ricavi", "revenue", "big"),

@@ -82,16 +82,17 @@ significato no. È per questo che i profili esistono.
 
 ### Cosa cambia, dimensione per dimensione
 
-| Dimensione | Industriale | Banca | Assicurazione |
-|---|---|---|---|
-| Redditività primaria | ROIC | **ROTCE** | **Combined ratio** + ROTCE |
-| "Margine lordo" | Margine lordo | **NIM** (margine di interesse / attivo) | Rendimento degli investimenti |
-| "Margine operativo" | Reddito op. / ricavi | **Efficiency ratio** (costi/ricavi, inverso) | — |
-| Generazione di valore | Owner Earnings | Crescita del **patrimonio tangibile/azione** | Crescita del **patrimonio/azione** |
-| Solidità #1 | Debt/Equity | **Patrimonio / attivo** (proxy di leva, non CET1) | Patrimonio / attivo |
-| Solidità #2 | Debt/EBITDA | **Loan-to-Deposit** | Debt/Equity |
-| Solidità #3 | Interest Coverage | **Costo del credito** | — |
-| Solidità #4 | Current Ratio | — | — |
+| Dimensione | Industriale | Banca | Assicurazione | REIT |
+|---|---|---|---|---|
+| Redditività primaria | ROIC | **ROTCE** | **Combined ratio** + ROTCE | **FFO / ricavi** |
+| "Margine lordo" | Margine lordo | **NIM** (margine di interesse / attivo) | Rendimento degli investimenti | **AFFO / ricavi** |
+| "Margine operativo" | Reddito op. / ricavi | **Efficiency ratio** (costi/ricavi, inverso) | — | **FFO / attivo** |
+| Generazione di valore | Owner Earnings | Crescita del **patrimonio tangibile/azione** | Crescita del **patrimonio/azione** | Crescita degli **FFO/azione** |
+| Solidità #1 | Debt/Equity | **Patrimonio / attivo** (proxy di leva, non CET1) | Patrimonio / attivo | **Debito / attivo** (proxy del loan-to-value) |
+| Solidità #2 | Debt/EBITDA | **Loan-to-Deposit** | Debt/Equity | Debt/EBITDA (soglia 4,5-8x) |
+| Solidità #3 | Interest Coverage | **Costo del credito** | — | Interest Coverage |
+| Solidità #4 | Current Ratio | — | — | — |
+| Sostenibilità del dividendo | — | — | — | **Dividendi / FFO** |
 
 **Le soglie cambiano di un ordine di grandezza.** Un ROA dell'1% per una banca è buono;
 per un industriale è pessimo. È lo stesso numero che significa cose opposte, perché la
@@ -146,6 +147,88 @@ patrimonio netto per azione** (35% della categoria) — il metro con cui Berkshi
 misurato sé stessa per decenni, e l'unico immune al rumore contabile — e allargando molto
 la soglia di variabilità accettata sul ROE (CV fino a 0.90 contro lo 0.60 industriale).
 
+### Il profilo REIT e l'ammortamento che non è un costo
+
+Per un'immobiliare la distorsione non nasce dal debito ma dall'**ammortamento**. Il
+principio contabile impone di deprezzare un fabbricato su 27,5 o 40 anni, ma un immobile
+ben tenuto in una buona posizione **non perde valore**: spesso lo guadagna. Resta un
+costo che non corrisponde ad alcuna uscita e ad alcun logorio economico.
+
+La conseguenza è che su un REIT sano l'utile netto può essere vicino a zero, e con lui
+ROE, ROA e margine netto. Nel fixture di test un REIT con il 40% di margine sugli FFO
+mostra un margine netto del 10% e un ROA dell'1,4%: applicare il metro industriale non
+produce un errore, produce un'azienda che sembra incapace di guadagnare.
+
+**FFO** (Funds From Operations, definizione NAREIT) rimette al loro posto le poste non
+economiche:
+
+```
+FFO = Utile netto + Ammortamenti sugli immobili − Plusvalenze da cessione
+```
+
+Le plusvalenze si escludono perché vendere un palazzo non è l'attività ricorrente di un
+REIT: gonfierebbero l'anno della vendita e lascerebbero un buco l'anno dopo.
+
+**AFFO** (Adjusted FFO) toglie il capitale che serve a tenere in piedi gli immobili:
+
+```
+AFFO = FFO − CapEx
+```
+
+ed è la misura che paga il dividendo — l'equivalente per un REIT degli Owner Earnings,
+e per la stessa ragione: sottrae il capitale che l'azienda *deve* reinvestire per restare
+dov'è.
+
+#### Perché qui il metodo Greenwald non si usa
+
+Il profilo industriale separa il CapEx di mantenimento da quello di crescita
+moltiplicando il rapporto immobilizzazioni/ricavi per l'incremento dei ricavi. Su un REIT
+quel rapporto vale **6 o 7** — servono sei euro di immobili per un euro di canone annuo —
+contro lo 0,3-1,0 di un industriale. Il risultato è che qualunque crescita dei ricavi
+assorbe, sulla carta, più CapEx di quanto l'azienda ne spenda: il CapEx di mantenimento
+risulta **zero** e gli AFFO coincidono con gli FFO.
+
+Non è un problema di taratura. L'AFFO è la metrica che dice se il dividendo è coperto, e
+farla coincidere con gli FFO significa dichiarare coperto un dividendo che potrebbe non
+esserlo. Un AFFO sovrastimato è più pericoloso di uno prudente, quindi il profilo sottrae
+il **CapEx totale** — che include lo sviluppo — e lo dichiara fra le stime.
+
+Riferimenti del profilo REIT:
+
+| Metrica | 0 punti | 100 punti | Peso interno |
+|---|---|---|---|
+| FFO / ricavi | 20% | 55% | 30% (redditività) |
+| AFFO / ricavi | 15% | 45% | 30% |
+| FFO / totale attivo | 3% | 9% | 25% |
+| Dividendi / FFO | 100% | 65% | 15% |
+| Debito / totale attivo | 60% | 30% | 40% (leva) |
+| Debt / EBITDA | 8,0x | 4,5x | 35% |
+| Interest Coverage | 1,8x | 5,0x | 25% |
+
+Il **payout sugli FFO** è la metrica di sostenibilità del dividendo. I REIT americani
+devono distribuire il 90% del reddito imponibile per mantenere lo status fiscale, quindi
+un payout alto è strutturale — ma va misurato sugli FFO, non sull'utile netto, dove
+sarebbe sistematicamente sopra il 100% e sembrerebbe sempre insostenibile.
+
+#### Nella valutazione
+
+Il DCF resta il modello giusto (un immobile è un flusso di canoni attualizzato) ma sconta
+gli **AFFO** invece degli Owner Earnings. L'**EPV esce dalla sintesi** e resta come
+riferimento a schermo: assume crescita zero, e su un portafoglio immobiliare i canoni
+seguono l'inflazione — una crescita nulla non è prudenza, è un errore. Graham Number e
+NCAV restano dove erano, fra i riferimenti: su un REIT l'attivo è per definizione non
+corrente, e il NCAV è strutturalmente negativo.
+
+#### Limiti dichiarati
+
+L'ammortamento disponibile è quello **totale** del rendiconto, non la sola quota
+immobiliare: su un REIT la differenza è minima, ma è un'approssimazione. Le plusvalenze da
+cessione spesso non compaiono come voce separata, e in quel caso gli FFO le includono e
+sono sovrastimati negli anni con dismissioni rilevanti. Il rilevamento automatico scatta
+se gli immobili superano il 40% dell'attivo; senza una voce immobiliare esplicita il
+ripiego è euristico (immobilizzazioni oltre il 70% dell'attivo **e** ammortamenti oltre il
+20% dei ricavi) e può confondere una utility con un REIT — per questo viene dichiarato.
+
 ### Come viene riconosciuto il settore
 
 Dalla **struttura del bilancio**, non dall'etichetta. Ma non dalla semplice *presenza*
@@ -155,7 +238,13 @@ di una voce: dal suo **peso**.
 |---|---|
 | Banca | depositi > **20%** del totale attivo, oppure margine di interesse > **30%** dei ricavi |
 | Assicurazione | premi > **20%** dei ricavi, oppure riserve tecniche > **10%** dell'attivo, oppure sinistri e prestazioni > **20%** dei ricavi |
+| REIT | immobili > **40%** del totale attivo, oppure immobilizzazioni > **70%** dell'attivo **e** ammortamenti > **20%** dei ricavi |
 | Industriale | nessuna delle precedenti |
+
+L'ordine dei controlli è banca, assicurazione, REIT, industriale: un REIT non ha né
+depositi né premi, quindi non c'è conflitto possibile. La seconda condizione del REIT è
+una congiunzione e non un'alternativa, perché la sola intensità di capitale descrive
+anche utility, telecom e industria pesante.
 
 Ogni rapporto è calcolato come **mediana** dei valori annuali, non sull'ultimo esercizio:
 una riclassificazione o un anno anomalo non devono spostare l'azienda in un altro profilo.
@@ -1325,13 +1414,15 @@ preavviso e occasionalmente restituisce valori sbagliati. Ogni numero prodotto d
 modello eredita questa fragilità. La sezione `data_quality` di ogni output elenca cosa è
 stato stimato: leggerla non è opzionale.
 
-**Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni e
-aziende operative, e decide sulla materialità delle voci, non sulla loro presenza: le
-soglie (depositi 20% dell'attivo, margine di interesse 30% dei ricavi, premi 20% dei
-ricavi) sono anch'esse convenzioni, tarate su casi noti — JPMorgan, Goldman Sachs,
-Berkshire, Alphabet — e non su un'ottimizzazione. Non coprono i casi di confine — asset
-manager, gestori di mercati, società immobiliari, utility regolate — che finiscono nel
-profilo industriale e vanno letti con cautela o forzati a mano. E per i finanziari mancano i ratios di vigilanza:
+**Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni,
+REIT e aziende operative, e decide sulla materialità delle voci, non sulla loro presenza:
+le soglie (depositi 20% dell'attivo, margine di interesse 30% dei ricavi, premi 20% dei
+ricavi, immobili 40% dell'attivo) sono anch'esse convenzioni, tarate su casi noti —
+JPMorgan, Goldman Sachs, Berkshire, Alphabet — e non su un'ottimizzazione. Restano fuori
+i casi di confine — asset manager, gestori di mercati, utility regolate, E&P — che
+finiscono nel profilo industriale e vanno letti con cautela o forzati a mano. Il ripiego
+euristico del profilo REIT può in particolare confondere una utility con un'immobiliare:
+quando scatta, lo dichiara. E per i finanziari mancano i ratios di vigilanza:
 il giudizio sulla solidità patrimoniale poggia su proxy dichiarati, non sui numeri veri.
 
 **Sulla capitalizzazione della R&S.** La vita utile è una convenzione (5 anni software,

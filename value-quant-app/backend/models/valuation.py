@@ -159,6 +159,15 @@ FINANCIAL_AGGREGATE_WEIGHTS: Dict[str, float] = {
     "historical_multiples": 0.20,
 }
 
+#: Pesi per i REIT. Il DCF resta il modello giusto (un immobile e' un flusso di canoni
+#: attualizzato), ma scontato sugli **AFFO** invece che sugli Owner Earnings. L'EPV
+#: sparisce dalla sintesi: assume crescita zero, e su un portafoglio immobiliare i canoni
+#: seguono l'inflazione — una crescita nulla non e' prudenza, e' un errore.
+REIT_AGGREGATE_WEIGHTS: Dict[str, float] = {
+    "dcf_owner_earnings": 0.60,
+    "historical_multiples": 0.40,
+}
+
 #: Metodi mostrati come riferimento ma **esclusi** dalla sintesi.
 #: Graham Number e NCAV nascono per aziende asset-heavy comprate a sconto sul
 #: patrimonio: applicati a un'azienda asset-light (o che ha ricomprato azioni
@@ -1497,6 +1506,7 @@ def calculate_valuation(
         import sectors  # type: ignore[no-redef]
     detected = sector if sector in sectors.PROFILES else sectors.detect_sector(financials, quality)
     is_financial = detected in (sectors.BANK, sectors.INSURANCE)
+    is_reit = detected == sectors.REIT
 
     try:
         fundamentals = extract_fundamentals(financials, quality, sector=detected)
@@ -1521,7 +1531,23 @@ def calculate_valuation(
             capitalize_research_development(fundamentals, rd_life, quality)
 
     owner_earnings: Dict[int, Optional[float]] = {}
-    if not is_financial:
+    if is_reit:
+        # Su un REIT il DCF si sconta sugli AFFO: l'utile netto e' schiacciato da
+        # ammortamenti che non corrispondono a un logorio reale, e gli Owner Earnings
+        # calcolati col metodo industriale erediterebbero lo stesso problema. La formula
+        # e' quella del profilo di settore, non una seconda copia.
+        reit_series = sectors.build_metrics(fundamentals, sectors.REIT, quality)
+        owner_earnings = dict(reit_series["affo"])
+        for year in fundamentals:
+            fundamentals[year]["owner_earnings"] = owner_earnings.get(year)
+            fundamentals[year]["ffo"] = reit_series["ffo"].get(year)
+            fundamentals[year]["affo"] = owner_earnings.get(year)
+        quality.note(
+            "Valutazione immobiliare: il DCF sconta gli AFFO (FFO al netto del CapEx), "
+            "non gli Owner Earnings. EPV escluso dalla sintesi — assume crescita zero, "
+            "ma i canoni seguono l'inflazione."
+        )
+    elif not is_financial:
         maintenance_capex = estimate_maintenance_capex(fundamentals, quality)
         owner_earnings = calculate_owner_earnings(
             fundamentals, quality, maintenance_capex=maintenance_capex
@@ -1578,7 +1604,12 @@ def calculate_valuation(
     result["mode"] = "buffett" if buffett_mode else "standard"
 
     # --- Tasso di sconto in modalita' buffett ---------------------------------
-    if buffett_mode and not is_financial:
+    if buffett_mode and is_reit:
+        quality.note(
+            "Modalita' buffett ignorata: i criteri pubblicati di Berkshire riguardano "
+            "aziende operative, non portafogli immobiliari."
+        )
+    if buffett_mode and not is_financial and not is_reit:
         predictability = assess_predictability(
             owner_earnings,
             {year: row.get("net_income") for year, row in fundamentals.items()},
@@ -1726,7 +1757,7 @@ def calculate_valuation(
 
     result["methods"] = {
         "dcf_owner_earnings": {
-            "label": "DCF Owner Earnings",
+            "label": "DCF AFFO" if is_reit else "DCF Owner Earnings",
             "value_per_share": _round(dcf.get("value_per_share"), 2),
             "enterprise_value": _round(dcf.get("enterprise_value"), 0),
             "terminal_weight": _round(dcf.get("terminal_weight"), 4),
@@ -1760,20 +1791,25 @@ def calculate_valuation(
     # Media pesata dei soli metodi "going concern" (vedi AGGREGATE_WEIGHTS): una
     # mediana secca fra metodi di natura diversa lascerebbe che un Graham Number
     # privo di significato per un'azienda asset-light decida il fair value.
+    # Su un REIT l'EPV scende fra i riferimenti: resta a schermo come confronto, ma non
+    # entra nella media pesata.
+    aggregate_weights = REIT_AGGREGATE_WEIGHTS if is_reit else AGGREGATE_WEIGHTS
+    reference_methods = REFERENCE_METHODS + ("epv",) if is_reit else REFERENCE_METHODS
+
     contributions: Dict[str, Dict[str, float]] = {}
-    for name, weight in AGGREGATE_WEIGHTS.items():
+    for name, weight in aggregate_weights.items():
         value = result["methods"].get(name, {}).get("value_per_share")
         if value is not None and value > 0:
             contributions[name] = {"value": value, "weight": weight}
-    for name in REFERENCE_METHODS:
+    for name in reference_methods:
         result["methods"][name]["aggregated"] = False
-    for name in AGGREGATE_WEIGHTS:
+    for name in aggregate_weights:
         result["methods"][name]["aggregated"] = name in contributions
         result["methods"][name]["weight"] = (
-            AGGREGATE_WEIGHTS[name] if name in contributions else 0.0
+            aggregate_weights[name] if name in contributions else 0.0
         )
 
-    skipped = [name for name in AGGREGATE_WEIGHTS if name not in contributions]
+    skipped = [name for name in aggregate_weights if name not in contributions]
     for name in skipped:
         quality.note(
             f"Metodo '{name}' escluso dalla sintesi (non calcolabile): "
