@@ -25,6 +25,8 @@ Senza ticker analizza `AAPL`. I ticker si separano con uno spazio, maiuscole o m
 |---|---|---|---|
 | `--buffett` | — | off | Criteri e tasso di sconto di Buffett, più la scorecard |
 | `--sector` | `industrial` \| `bank` \| `insurance` \| `reit` | auto | Forza il profilo invece del riconoscimento automatico |
+| `--sec` | flag | off | Completa le voci mancanti con i depositi XBRL della SEC (solo emittenti USA) |
+| `--overrides` | percorso | — | File JSON/YAML con voci di bilancio inserite a mano |
 | `--capitalize-rd` | flag | off | Tratta la R&S come investimento invece che come costo (Damodaran) |
 | `--rd-life` | intero | `5` | Vita utile della R&S capitalizzata: 5 software, 10 farmaceutico |
 | `--backtest` | — | off | Backtest della strategia (serve un minimo di **3 titoli**) |
@@ -89,6 +91,61 @@ python run_analysis.py KO PG WMT MCD JNJ --sweep                 # + griglia di 
 
 `--sweep` rifà il backtest per ogni cella della griglia (25 esecuzioni): su un universo
 ampio possono volerci minuti.
+
+### Quando yfinance non trova una voce
+
+Non sono "tanti dati mancanti": sono poche voci ad alto impatto. Misurato sul modello:
+
+| Voce mancante | Cosa fa cadere |
+|---|---|
+| `Net Loan` | 2 componenti su 3 della categoria credito → copertura al 40% |
+| `Total Debt` | 3 regole Buffett su 7 |
+| `Goodwill` | il capitale tangibile diventa una stima |
+| storia di 4-5 anni | consistenza debole, R&S capitalizzata che estrapola |
+
+Due strade, cumulabili:
+
+```bash
+python run_analysis.py JPM --sec                          # SEC EDGAR, emittenti USA
+python run_analysis.py ENI.MI --overrides dati/miei.json  # a mano, qualunque mercato
+python run_analysis.py JPM --sec --overrides dati/miei.json
+```
+
+**`--sec`** legge i depositi XBRL dalla SEC: gratuito, ufficiale, nessuna chiave API, e
+porta **10+ anni di storia** invece di 4-5. La SEC richiede di identificarsi, quindi
+prima del primo uso:
+
+```bash
+# Windows PowerShell
+$env:SEC_USER_AGENT = "Nome Cognome nome@dominio.it"
+# Linux / macOS / Colab
+export SEC_USER_AGENT="Nome Cognome nome@dominio.it"
+```
+
+Senza questa variabile la SEC risponde `403` e il modello lo dichiara invece di fallire
+in silenzio. I dati scaricati restano in cache per una settimana (`SEC_CACHE_DIR` per
+cambiare cartella). Copre solo chi deposita presso la SEC: emittenti americani e ADR con
+20-F, non Borsa Italiana.
+
+**`--overrides`** prende un file JSON con le voci scritte a mano — vedi
+`dati/override-esempio.json`. Le etichette sono quelle di yfinance, si copiano dal
+bilancio:
+
+```json
+{
+  "JPM": {
+    "balance_sheet": {
+      "Net Loan": {"2024": 1310000000000, "2023": 1250000000000}
+    }
+  }
+}
+```
+
+Funziona su qualunque mercato e senza rete. Precedenza: **override > SEC > yfinance**. La
+SEC riempie solo i buchi e non sostituisce ciò che c'è già; quando le due fonti divergono
+di oltre il 5% su uno stesso numero la differenza viene dichiarata invece di essere
+risolta d'ufficio. Ogni riga aggiunta compare in `QUALITA' DEL DATO` con la sua
+provenienza.
 
 ### REIT e immobiliari
 
@@ -198,6 +255,7 @@ python tests/test_sectors.py
 python tests/test_buffett.py
 python tests/test_research.py
 python tests/test_reit.py
+python tests/test_datasources.py
 python tests/test_pipeline.py
 ```
 

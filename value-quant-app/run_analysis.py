@@ -13,6 +13,8 @@ Esempi::
     python run_analysis.py JPM               # profilo bancario riconosciuto da solo
     python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
     python run_analysis.py O SPG                     # profilo REIT: FFO e AFFO
+    python run_analysis.py JPM --sec                 # voci mancanti da SEC EDGAR
+    python run_analysis.py ENI.MI --overrides dati/miei.json   # voci inserite a mano
     python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
     python run_analysis.py GOOGL --capitalize-rd          # R&S come investimento
     python run_analysis.py PFE --capitalize-rd --rd-life 10   # vita utile del farmaceutico
@@ -53,6 +55,8 @@ from models.valuation import (  # noqa: E402
     format_valuation_report,
 )
 
+from models.datasources import enrich_financials  # noqa: E402
+
 try:
     from models import visualize
 except ImportError:  # pragma: no cover - matplotlib assente
@@ -74,6 +78,8 @@ def analyze_ticker(
     mode: str = "standard",
     capitalize_rd: bool = False,
     rd_life: int = DEFAULT_RD_LIFE,
+    sec: bool = False,
+    overrides_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Qualita' + valutazione di un titolo, con un solo download dei bilanci.
 
@@ -82,6 +88,13 @@ def analyze_ticker(
     con ``sector`` quando il riconoscimento automatico sbaglia.
     """
     financials = fetch_financials(ticker, years=years)
+    # Le fonti aggiuntive arricchiscono i prospetti prima di ogni calcolo: cosi' il
+    # settore, le metriche e la valutazione vedono lo stesso bilancio completato.
+    if sec or overrides_path:
+        financials = enrich_financials(
+            financials, ticker, sec=sec, overrides_path=overrides_path,
+            quality=financials.get("data_quality"),
+        )
     quality = calculate_quality_score(
         ticker, years=years, financials=financials, sector=sector, mode=mode,
         capitalize_rd=capitalize_rd, rd_life=rd_life,
@@ -255,6 +268,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
         "show": False, "json": False, "demo": False, "years": 10,
         "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None, "mode": "standard",
         "capitalize_rd": False, "rd_life": DEFAULT_RD_LIFE,
+        "sec": False, "overrides": None,
     }
     index = 0
     while index < len(argv):
@@ -281,6 +295,10 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["json"] = True; index += 1
         elif argument == "--buffett":
             options["mode"] = "buffett"; index += 1
+        elif argument == "--sec":
+            options["sec"] = True; index += 1
+        elif argument == "--overrides" and index + 1 < len(argv):
+            options["overrides"] = argv[index + 1]; index += 2
         elif argument == "--capitalize-rd":
             options["capitalize_rd"] = True; index += 1
         elif argument == "--rd-life" and index + 1 < len(argv):
@@ -326,6 +344,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             growth_override=options["growth"], wacc_override=options["wacc"],
             sector=options["sector"], mode=options["mode"],
             capitalize_rd=options["capitalize_rd"], rd_life=options["rd_life"],
+            sec=options["sec"], overrides_path=options["overrides"],
         )
         analyses.append(analysis)
         print(format_report(analysis["quality"]))

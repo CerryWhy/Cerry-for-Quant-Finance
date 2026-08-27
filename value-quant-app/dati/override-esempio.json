@@ -1,0 +1,46 @@
+{
+  "_commento": [
+    "Voci di bilancio inserite a mano, per quello che nessuna fonte automatica trova.",
+    "Le etichette sono quelle di yfinance: si copiano dal bilancio senza conoscere il codice.",
+    "Gli importi vanno nell'unita' del bilancio (unita', non milioni).",
+    "Un override sovrascrive sempre il dato automatico: si scrive a mano cio' che si sa.",
+    "Uso: python run_analysis.py JPM --overrides dati/override-esempio.json",
+    "Le chiavi che iniziano con _ vengono ignorate, non essendo ticker."
+  ],
+
+  "JPM": {
+    "balance_sheet": {
+      "Net Loan": {
+        "2024": 1310000000000,
+        "2023": 1250000000000,
+        "2022": 1130000000000
+      },
+      "Total Deposits": {
+        "2024": 2410000000000,
+        "2023": 2400000000000,
+        "2022": 2340000000000
+      }
+    },
+    "income_statement": {
+      "Credit Losses Provision": {
+        "2024": 10600000000,
+        "2023": 6900000000,
+        "2022": 6390000000
+      }
+    }
+  },
+
+  "ENI.MI": {
+    "_commento": "Esempio non americano: SEC EDGAR non copre Borsa Italiana.",
+    "balance_sheet": {
+      "Total Debt": {
+        "2024": 28000000000,
+        "2023": 27000000000
+      },
+      "Goodwill": {
+        "2024": 400000000,
+        "2023": 400000000
+      }
+    }
+  }
+}

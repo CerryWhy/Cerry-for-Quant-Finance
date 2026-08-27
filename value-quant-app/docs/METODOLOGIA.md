@@ -11,13 +11,14 @@ e soprattutto **come si leggono i numeri che produce**.
 2. [Modulo 0 — Profili di settore](#15-profili-di-settore)
 3. [Modalità Buffett](#buffett-mode)
 4. [Capitalizzazione della R&S](#rd-capitalization)
-5. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
-6. [Modulo 2 — Valuation](#3-modulo-2--valuation)
-7. [Modulo 3 — Backtest](#4-modulo-3--backtest)
-8. [Modulo 4 — Visualize](#5-modulo-4--visualize)
-9. [Come si usano insieme](#6-come-si-usano-insieme)
-10. [Glossario](#7-glossario)
-11. [Limiti e avvertenze](#8-limiti-e-avvertenze)
+5. [Le fonti dei dati](#data-sources)
+6. [Modulo 1 — Quality Score](#2-modulo-1--quality-score)
+7. [Modulo 2 — Valuation](#3-modulo-2--valuation)
+8. [Modulo 3 — Backtest](#4-modulo-3--backtest)
+9. [Modulo 4 — Visualize](#5-modulo-4--visualize)
+10. [Come si usano insieme](#6-come-si-usano-insieme)
+11. [Glossario](#7-glossario)
+12. [Limiti e avvertenze](#8-limiti-e-avvertenze)
 
 ---
 
@@ -591,6 +592,108 @@ si possano calcolare, è che *una voce di costo è classificata male*. Quella si
 e la correzione vale per chiunque faccia ricerca — farmaceutica, industria, difesa — non
 per un'etichetta di settore. Undici profili GICS nasconderebbero il problema dentro
 soglie arbitrarie invece di risolverlo.
+
+---
+
+<a name="data-sources"></a>
+## 1-quinquies. Le fonti dei dati
+
+### Il problema, misurato
+
+yfinance è gratuito e fa quello che può, ma su alcune voci non arriva mai. La tentazione
+è descriverlo come «mancano molti dati»: non è vero, e la differenza conta. Sono **poche
+voci ad alto impatto**, e si può misurare quali:
+
+| Voce mancante | Effetto sul modello |
+|---|---|
+| `Net Loan` (impieghi netti) | cadono **2 componenti su 3** della categoria "capitale e rischio di credito": impieghi/depositi e costo del credito. Copertura al **40%** |
+| `Total Debt` | cadono **3 regole Buffett su 7**: capitale tangibile, poco o nessun debito, debito ripagabile |
+| `Goodwill` e immateriali | il capitale tangibile diventa una stima dichiarata |
+| storia di 4-5 esercizi | consistenza poco significativa, e la R&S capitalizzata deve estrapolare |
+
+Con **cinque o sei voci per emittente** si copre quasi tutto. Il problema è mirato, e per
+questo vale la pena risolverlo alla fonte invece di aggiungere un altro proxy.
+
+### Il principio: arricchire i prospetti, non le formule
+
+Le fonti aggiuntive **non** producono metriche. Producono **righe di bilancio nel formato
+di yfinance**, con le etichette che gli alias del modello già riconoscono: le righe
+mancanti vengono aggiunte ai tre prospetti, e da quel punto in poi tutto il resto lavora
+come sempre.
+
+È una scelta di progetto, non un dettaglio di implementazione. La conseguenza è che
+nessuna formula viene duplicata e nessun calcolo a valle cambia comportamento: ROIC,
+Owner Earnings, residual income e soglie di punteggio restano quelli, e vedono
+semplicemente meno buchi. Anche le derivazioni esistenti continuano a funzionare da sole
+— fornendo `Long Term Debt` e `Current Debt` si attiva il fallback che ricostruisce il
+debito totale, senza scrivere una riga di codice in più.
+
+### SEC EDGAR (`--sec`)
+
+I depositi XBRL della SEC: gratuiti, ufficiali, nessuna chiave API, e **10+ anni di
+storia** invece di 4-5. Una sola richiesta per emittente (`companyfacts`), messa in cache
+per una settimana.
+
+Il parsing di XBRL ha tre insidie, e il modulo le affronta esplicitamente:
+
+1. **periodi non annuali mescolati agli annuali** — un trimestre non è un esercizio. Si
+   tengono solo i periodi di durata compresa fra 300 e 400 giorni, forbice che accoglie
+   anche gli esercizi 52/53 settimane della distribuzione americana. Le voci di stato
+   patrimoniale non hanno una data di inizio: sono istantanee e passano;
+2. **depositi rettificati dello stesso esercizio** — a parità di anno vince il deposito
+   più recente, che è il dato rivisto. È la stessa convenzione di yfinance;
+3. **tag che cambiano nome fra emittenti** — per ogni voce si provano più tag in ordine e
+   si dichiara quale ha funzionato. Su un emittente con tassonomia inusuale può non
+   trovare nulla, e lo dice.
+
+La SEC richiede un User-Agent che identifichi chi chiama: senza, risponde `403`. Si
+imposta con la variabile d'ambiente `SEC_USER_AGENT`, e in mancanza il modello dichiara
+l'errore invece di fallire in silenzio. Copre solo chi deposita presso la SEC: emittenti
+americani e ADR esteri con 20-F.
+
+### Override manuali (`--overrides`)
+
+Un file JSON (o YAML) con le voci scritte a mano, per quello che nessuna fonte automatica
+trova — in particolare Borsa Italiana e gli altri mercati europei, dove EDGAR non arriva.
+Le etichette sono quelle di yfinance, quindi si copiano dal bilancio senza conoscere la
+struttura interna del codice. Vedi `dati/override-esempio.json`.
+
+### Precedenza, e perché non è ovvia
+
+```
+override manuale  >  SEC EDGAR  >  yfinance
+```
+
+**L'override sovrascrive sempre**: se un numero è scritto a mano è perché si sa che quello
+automatico manca o è sbagliato.
+
+**SEC EDGAR riempie i buchi e non sostituisce ciò che c'è già.** La scelta opposta sarebbe
+difendibile — EDGAR è la fonte primaria, yfinance un aggregatore che a volte sbaglia — ma
+il modello è tarato e testato su yfinance, e cambiare la base di numeri che già esistono
+richiederebbe di riverificare ogni soglia. Riempire i buchi è additivo e non può
+peggiorare un risultato esistente.
+
+Il merge lavora **per cella**, non per riga: una voce presente ma con meno esercizi della
+fonte non è un conflitto, gli anni che le mancano sono buchi. È anche il modo in cui la
+storia si allunga oltre i 4-5 esercizi di yfinance — gli anni in più diventano colonne
+nuove.
+
+Quando le due fonti divergono di oltre il 5% su uno stesso numero, la differenza viene
+**dichiarata** e il dato di partenza resta al suo posto. Due fonti che non concordano sono
+un'informazione, non un conflitto da risolvere d'ufficio: spesso è il segnale di una
+riclassificazione o di un perimetro di consolidamento diverso.
+
+Ogni riga aggiunta compare in `data_quality` con la sua provenienza. Un dato di origine
+diversa non è un problema; un dato di origine ignota sì.
+
+### Cosa resta fuori
+
+I **ratios di vigilanza veri** (CET1, NPL, LCR) vivono nelle segnalazioni regolamentari.
+Compaiono a volte nei 10-K bancari in XBRL, ma con tag non uniformi: la strada affidabile
+sarebbe l'API FDIC BankFind, che però richiede di mappare il ticker sul certificato FDIC —
+e la holding quotata non è l'entità assicurata. Finché quella strada non è percorsa, il
+profilo bancario continua a usare patrimonio/attivo e costo del credito come proxy
+dichiarati.
 
 ---
 
@@ -1412,7 +1515,9 @@ python run_analysis.py AAPL MSFT KO PG JNJ V MA HD --backtest --json
 dieci, riporta i bilanci nella versione rivista, cambia le etichette delle voci senza
 preavviso e occasionalmente restituisce valori sbagliati. Ogni numero prodotto dal
 modello eredita questa fragilità. La sezione `data_quality` di ogni output elenca cosa è
-stato stimato: leggerla non è opzionale.
+stato stimato: leggerla non è opzionale. Le voci più costose si possono completare con
+`--sec` (depositi XBRL della SEC, solo emittenti americani) e con `--overrides` (a mano,
+qualunque mercato): vedi [Le fonti dei dati](#data-sources).
 
 **Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni,
 REIT e aziende operative, e decide sulla materialità delle voci, non sulla loro presenza:
