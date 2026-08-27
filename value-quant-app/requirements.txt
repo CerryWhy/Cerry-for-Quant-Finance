@@ -3,3 +3,10 @@ yfinance>=0.2.40      # bilanci e prezzi storici
 pandas>=2.0           # manipolazione dei prospetti e delle serie
 numpy>=1.24           # calcoli vettoriali di backtest e griglie
 matplotlib>=3.7       # grafici e tear sheet (opzionale: senza, i moduli calcolano lo stesso)
+
+# --- Facoltative: solo per rigenerare il PDF della metodologia ---------------
+# Il modello non ne ha bisogno. Servono a `python docs/md2pdf.py`.
+# markdown>=3.4        # conversione del Markdown in HTML
+# playwright>=1.40     # impaginazione con numeri di pagina (poi: playwright install chromium)
+# In alternativa a playwright basta un Chrome o Chromium installato: lo script lo trova
+# da solo, ma senza numeri di pagina.

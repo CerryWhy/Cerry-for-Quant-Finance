@@ -18,7 +18,8 @@ value-quant-app/
 │   └── visualize.py             tear sheet e grafici in tema scuro
 ├── docs/
 │   ├── COMANDI.md               guida rapida a tutte le opzioni
-│   └── METODOLOGIA.md           formule, soglie e come si leggono i numeri
+│   ├── METODOLOGIA.md           formule, soglie e come si leggono i numeri
+│   └── md2pdf.py                rigenera il PDF della metodologia dal Markdown
 └── tests/                       113 test offline, nessuna rete richiesta
 ```
 

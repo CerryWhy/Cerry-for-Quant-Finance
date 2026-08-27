@@ -332,6 +332,29 @@ accanto al punteggio segnala la stessa cosa: `91.9*` e `78.3` non sono confronta
 
 ---
 
+## Rigenerare il PDF della metodologia
+
+`docs/METODOLOGIA.md` è la fonte; il PDF è un artefatto derivato e va rifatto quando il
+Markdown cambia:
+
+```bash
+pip install markdown
+python docs/md2pdf.py                    # -> docs/Metodologia-value-quant-app.pdf
+python docs/md2pdf.py --html             # si ferma all'HTML, per rivedere il CSS
+```
+
+Serve un browser headless per l'impaginazione. Con **Playwright** installato
+(`pip install playwright && playwright install chromium`) il PDF esce con i numeri di
+pagina; con il solo Chrome o Chromium di sistema esce senza, perché la riga di comando di
+Chromium non espone i template di piede — lo script lo dichiara quando ripiega. Se il
+browser non viene trovato da solo:
+
+```bash
+python docs/md2pdf.py --browser "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
+---
+
 ## Errori frequenti
 
 | Sintomo | Causa | Rimedio |
