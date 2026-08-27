@@ -95,6 +95,17 @@ significato no. È per questo che i profili esistono.
 | Solidità #4 | Current Ratio | — | — | — |
 | Sostenibilità del dividendo | — | — | — | **Dividendi / FFO** |
 
+Utility ed E&P completano il quadro con altre due colonne:
+
+| Dimensione | Utility regolata | Esplorazione e produzione |
+|---|---|---|
+| Redditività primaria | **ROE** (lo fissa il regolatore) | **EBITDAX / ricavi** |
+| Rendimento del capitale | **Utile / rate base** | ROIC medio di ciclo |
+| Generazione di valore | crescita della **rate base** | **flusso operativo / ricavi** |
+| Solidità #1 | **FFO / debito** (metrica delle agenzie) | **Debt / EBITDAX** |
+| Solidità #2 | **Debito / capitale** | **CapEx / flusso operativo** |
+| Segnale di crescita | **CapEx / ammortamenti** sopra 1 | tasso di rimpiazzo delle riserve (non disponibile) |
+
 **Le soglie cambiano di un ordine di grandezza.** Un ROA dell'1% per una banca è buono;
 per un industriale è pessimo. È lo stesso numero che significa cose opposte, perché la
 banca lavora con leva ~10x. Applicare le soglie industriali (ROA: 1% → 0 punti, 12% →
@@ -147,6 +158,84 @@ Il profilo assicurativo risponde spostando il peso della consistenza sulla **cre
 patrimonio netto per azione** (35% della categoria) — il metro con cui Berkshire ha
 misurato sé stessa per decenni, e l'unico immune al rumore contabile — e allargando molto
 la soglia di variabilità accettata sul ROE (CV fino a 0.90 contro lo 0.60 industriale).
+
+### Utility regolate: il rendimento non lo decide il mercato
+
+Per una utility regolata il ROIC non misura un vantaggio competitivo, perché **non è
+l'azienda a determinarlo**: il regolatore autorizza un rendimento — l'*allowed ROE*, negli
+Stati Uniti tipicamente fra il 9% e il 10,5% — sul capitale investito nella rete, la *rate
+base*. Un ROIC del 6% non è un segno di debolezza e uno del 15% non sarebbe un moat:
+sarebbe un'anomalia destinata a essere riportata in tariffa al procedimento successivo.
+
+Le domande quindi cambiano:
+
+| Domanda | Metrica | Perché |
+|---|---|---|
+| Il rendimento concesso viene conseguito? | ROE, utile / rate base | uno scostamento persistente segnala costi fuori controllo o un regolatore ostile |
+| La rate base cresce? | crescita delle immobilizzazioni, CapEx / ammortamenti | più rete in tariffa, più utile ammesso: è l'unica crescita strutturale |
+| Il debito è sostenibile? | **FFO / debito** | è la metrica delle agenzie di rating, e decide il costo del capitale |
+| La struttura è quella approvata? | debito / capitale | 50-60% di debito è normale, il Debt/Equity non direbbe nulla |
+
+**Il CapEx sopra gli ammortamenti è un segnale positivo**, l'opposto di quanto valga per
+un industriale: significa rate base che cresce, quindi utile ammesso che cresce. Per
+questo il profilo espone `CapEx / ammortamenti` come metrica e non come avvertimento.
+
+Riferimenti del profilo utility:
+
+| Metrica | 0 punti | 100 punti | Peso interno |
+|---|---|---|---|
+| ROE medio | 6% | 12% | 35% (redditività) |
+| Utile / rate base | 2% | 6% | 25% |
+| Margine operativo | 10% | 28% | 20% |
+| FFO / ricavi | 15% | 35% | 20% |
+| CV del ROE | 0,35 | 0,05 | 30% (consistenza) |
+| FFO / debito | 10% | 25% | 40% (solidità) |
+| Debito / capitale | 70% | 45% | 30% |
+
+La soglia di stabilità del ROE è **più severa** che per un industriale (0,35 contro 0,60):
+la stabilità del rendimento non è una virtù fra le altre, è la ragione per cui si compra
+una utility.
+
+**Cosa non è ricostruibile.** L'*allowed ROE* e la rate base vera vivono nei procedimenti
+tariffari, non nei bilanci. La rate base è approssimata dalle immobilizzazioni nette, che
+ne sono la componente dominante ma non l'identica: escludono i lavori in corso non ancora
+in tariffa e non includono il capitale circolante autorizzato. Il modello misura quindi il
+ROE **conseguito** e la sua stabilità, non lo scostamento dal concesso.
+
+### Esplorazione e produzione: il prezzo domina, l'attivo si consuma
+
+Per un E&P l'utile dell'anno è quasi inutilizzabile, per due ragioni che agiscono insieme.
+
+La prima è il **prezzo**. Un produttore di idrocarburi non ha potere sul prezzo di ciò che
+vende: l'utile misura in buona parte dove stava il Brent, non come è stata gestita
+l'azienda. Normalizzare su un anno di picco produce un fair value che si sgonfia da solo;
+su un anno di minimo, l'opposto.
+
+La seconda è che **l'attivo si consuma mentre lo si sfrutta**. Un barile estratto è un
+barile che non c'è più, e il conto economico lo registra come *depletion*. Un E&P che non
+rimpiazza ciò che produce sta liquidando se stesso, e può farlo per anni mostrando utili
+eccellenti — sono precisamente gli utili della liquidazione.
+
+Nel bilancio di prova il fenomeno è visibile: nell'anno di fondo di ciclo l'utile netto va
+in **perdita** mentre il flusso di cassa operativo resta ampiamente positivo. Un modello
+che guarda l'utile vede un'azienda in crisi; uno che guarda la cassa vede un ciclo.
+
+| Metrica | Cosa risolve |
+|---|---|
+| **EBITDAX** = EBITDA + esplorazione | chi spesa l'esplorazione e chi la capitalizza (*successful efforts* contro *full cost*) non sono confrontabili sull'EBITDA, e la differenza è solo contabile |
+| Margine di cassa operativo | il prezzo lo sposta ma non lo falsifica |
+| **Debt / EBITDAX** | la misura di leva che il settore usa davvero |
+| **CapEx / flusso operativo** | sopra 1 la sostituzione delle riserve è finanziata da debito o da emissioni |
+| Anni con utile positivo | su un ciclico la domanda non è se l'utile oscilla — oscilla per forza — ma se resta positivo in fondo al ciclo |
+
+**Cosa non è ricostruibile, e pesa.** Il metro vero di un E&P sono le **riserve**: riserve
+provate, vita residua (R/P), tasso di rimpiazzo, costo di ritrovamento per barile, e il
+**PV-10** — il valore attuale scontato al 10% dei flussi futuri delle riserve, che le
+società americane devono pubblicare. Nessuno di questi numeri sta nei tre prospetti:
+vivono nelle tabelle supplementari del 10-K, e il modello li vedrebbe solo attraverso i
+depositi XBRL. Senza di essi il profilo misura la generazione di cassa e la leva, **non il
+valore dell'attivo principale**: è il limite più serio fra quelli dichiarati in questo
+documento, e va tenuto presente prima di usare il fair value di un E&P.
 
 ### Il profilo REIT e l'ammortamento che non è un costo
 
@@ -239,8 +328,17 @@ di una voce: dal suo **peso**.
 |---|---|
 | Banca | depositi > **20%** del totale attivo, oppure margine di interesse > **30%** dei ricavi |
 | Assicurazione | premi > **20%** dei ricavi, oppure riserve tecniche > **10%** dell'attivo, oppure sinistri e prestazioni > **20%** dei ricavi |
+| Utility regolata | presenza di **attivi regolatori** (> 0,5% dell'attivo) |
+| Esplorazione e produzione | presenza di **spesa di esplorazione** (> 0,2% dei ricavi) |
 | REIT | immobili > **40%** del totale attivo, oppure immobilizzazioni > **70%** dell'attivo **e** ammortamenti > **20%** dei ricavi |
 | Industriale | nessuna delle precedenti |
+
+Utility ed E&P si riconoscono da voci **esclusive**, e per loro la soglia serve solo a
+distinguere il dato dallo zero: gli attivi regolatori sono costi che il regolatore ha
+autorizzato a recuperare in tariffa e non esistono fuori da un settore a tariffa
+amministrata; la spesa di esplorazione esiste solo in chi cerca idrocarburi. Vengono
+controllate **prima** del REIT, perché tutti e tre hanno molte immobilizzazioni e un
+marcatore esplicito batte un'euristica.
 
 L'ordine dei controlli è banca, assicurazione, REIT, industriale: un REIT non ha né
 depositi né premi, quindi non c'è conflitto possibile. La seconda condizione del REIT è
@@ -935,6 +1033,27 @@ Se una componente non è calcolabile viene esclusa e il suo peso ridistribuito s
 altre della stessa categoria. Se un'intera categoria manca, il suo peso si redistribuisce
 sulle categorie rimaste, e la cosa viene annotata.
 
+**Dove il metodo Greenwald si rompe.** La separazione fra CapEx di mantenimento e di
+crescita moltiplica il rapporto immobilizzazioni/ricavi per l'incremento dei ricavi, e
+funziona dove quel rapporto vale 0,3-1,0. Sopra quel livello si rompe, e si rompe sempre
+nella stessa direzione: attribuisce alla crescita più CapEx di quanto l'azienda ne spenda,
+il mantenimento risulta troppo basso o nullo, e gli Owner Earnings escono **gonfiati**.
+Misurato sui bilanci di prova:
+
+| Profilo | PPE / ricavi | Mantenimento Greenwald | Convenzione usata |
+|---|---|---|---|
+| Industriale | 0,3 – 1,0 | attendibile | Greenwald |
+| Utility | 2,75 | 314 su 704 di ammortamenti | ammortamenti |
+| E&P | 1,89 | **zero** su 900 di CapEx | CapEx totale |
+| REIT | 6 – 7 | **zero** | CapEx totale |
+
+Le convenzioni alternative non sono ripieghi generici. Per una **utility** una rete si
+rinnova al ritmo del proprio deprezzamento, e quello che si spende in più entra in tariffa
+producendo utile aggiuntivo: è crescita vera e va tenuta fuori dal mantenimento. Per un
+**E&P** e un **REIT** il CapEx serve a rimpiazzare ciò che si consuma, quindi si sottrae
+per intero — stima prudenziale, dichiarata. Un flusso sovrastimato produce un fair value
+sovrastimato, ed è l'errore che costa.
+
 **La copertura: quanto vale un punteggio ottenuto per ridistribuzione.** La
 ridistribuzione tiene in piedi il calcolo quando manca un dato, ma cambia il significato
 del numero: un 47 costruito su tutte le componenti previste e un 47 costruito su una sola
@@ -1520,7 +1639,7 @@ stato stimato: leggerla non è opzionale. Le voci più costose si possono comple
 qualunque mercato): vedi [Le fonti dei dati](#data-sources).
 
 **Sui profili di settore.** Il riconoscimento automatico copre banche, assicurazioni,
-REIT e aziende operative, e decide sulla materialità delle voci, non sulla loro presenza:
+REIT, utility regolate, E&P e aziende operative, e decide sulla materialità delle voci, non sulla loro presenza:
 le soglie (depositi 20% dell'attivo, margine di interesse 30% dei ricavi, premi 20% dei
 ricavi, immobili 40% dell'attivo) sono anch'esse convenzioni, tarate su casi noti —
 JPMorgan, Goldman Sachs, Berkshire, Alphabet — e non su un'ottimizzazione. Restano fuori

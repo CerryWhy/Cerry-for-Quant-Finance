@@ -1416,6 +1416,56 @@ def _verdict(margin_of_safety: Optional[float]) -> str:
     return "Sopravvalutata"
 
 
+def _maintenance_capex_for(
+    sector: str,
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: _DataQuality,
+) -> Dict[int, Optional[float]]:
+    """CapEx di mantenimento secondo la convenzione del profilo.
+
+    Il metodo Greenwald si rompe dove le immobilizzazioni valgono molte volte i ricavi, e
+    si rompe sempre gonfiando gli Owner Earnings: su una utility stima 314 di mantenimento
+    contro 704 di ammortamenti, su un E&P stima **zero** contro 900 di CapEx effettivo.
+    Un flusso sovrastimato produce un fair value sovrastimato, che e' l'errore che costa.
+
+    Le convenzioni alternative stanno in ``sectors.MAINTENANCE_CAPEX_RULE`` con la loro
+    motivazione; qui si applicano e si dichiarano.
+    """
+    # Import ritardato: sectors importa da quality_score, che importa da qui.
+    try:
+        from . import sectors
+    except ImportError:  # pragma: no cover - esecuzione come script
+        import sectors  # type: ignore[no-redef]
+
+    rule = sectors.MAINTENANCE_CAPEX_RULE.get(sector, "greenwald")
+
+    if rule == "depreciation":
+        quality.estimate(
+            "CapEx di mantenimento posto pari agli ammortamenti: una rete regolata si "
+            "rinnova al ritmo del proprio deprezzamento, e quello che si spende in piu' "
+            "entra in tariffa come crescita. Il metodo Greenwald qui sottostima il "
+            "mantenimento e gonfierebbe gli Owner Earnings."
+        )
+        return {
+            year: abs(row["d_and_a"]) if row.get("d_and_a") is not None else None
+            for year, row in fundamentals.items()
+        }
+
+    if rule == "total":
+        quality.estimate(
+            "CapEx di mantenimento posto pari al CapEx totale: qui serve a rimpiazzare "
+            "cio' che si consuma (riserve estratte, immobili), e il metodo Greenwald "
+            "darebbe zero. Stima prudenziale: chi sta espandendo ha Owner Earnings piu' "
+            "bassi del vero."
+        )
+        return {
+            year: abs(row["capex"]) if row.get("capex") is not None else None
+            for year, row in fundamentals.items()
+        }
+
+    return estimate_maintenance_capex(fundamentals, quality)
+
+
 def calculate_valuation(
     ticker: str,
     *,
@@ -1548,7 +1598,7 @@ def calculate_valuation(
             "ma i canoni seguono l'inflazione."
         )
     elif not is_financial:
-        maintenance_capex = estimate_maintenance_capex(fundamentals, quality)
+        maintenance_capex = _maintenance_capex_for(detected, fundamentals, quality)
         owner_earnings = calculate_owner_earnings(
             fundamentals, quality, maintenance_capex=maintenance_capex
         )

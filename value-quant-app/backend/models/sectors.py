@@ -21,12 +21,22 @@ Applicare il profilo industriale a una banca non produce un errore: produce **nu
 plausibili e privi di significato**, che e' molto peggio. Questo modulo esiste per
 evitarlo.
 
-I quattro profili
------------------
+I sei profili
+-------------
 ``INDUSTRIAL``  aziende operative: ROIC, Owner Earnings, leva finanziaria
 ``BANK``        banche commerciali: ROTCE, margine di interesse, efficienza, funding
 ``INSURANCE``   assicurazioni e holding: crescita del patrimonio per azione, combined ratio
 ``REIT``        immobiliari: FFO e AFFO, perche' l'ammortamento non e' un costo reale
+``UTILITY``     utility regolate: il rendimento lo fissa il regolatore, non il mercato
+``ENERGY``      esplorazione e produzione: il prezzo domina l'utile, l'attivo si consuma
+
+Gli ultimi tre hanno la stessa radice dei primi con cause diverse. Per una **utility
+regolata** il rendimento non lo determina l'azienda: lo autorizza il regolatore sulla rate
+base, quindi un ROIC basso non e' debolezza competitiva e uno alto sarebbe un'anomalia
+destinata a rientrare in tariffa. Per un **E&P** l'utile dell'anno misura in buona parte
+dove stava il prezzo del greggio, e l'attivo si consuma mentre lo si sfrutta: chi non
+rimpiazza le riserve puo' mostrare utili eccellenti per anni, che sono gli utili della
+liquidazione.
 
 Il caso REIT ha la stessa radice degli altri con una causa diversa. Per un'immobiliare il
 problema non e' il debito ma l'**ammortamento**: il principio contabile deprezza un
@@ -92,10 +102,15 @@ __all__ = [
     "BANK",
     "BANK_DEPOSIT_SHARE",
     "BANK_INTEREST_SHARE",
+    "ENERGY",
+    "ENERGY_EXPLORATION_SHARE",
     "REIT",
     "REIT_DA_SHARE",
     "REIT_PPE_SHARE",
     "REIT_PROPERTY_SHARE",
+    "MAINTENANCE_CAPEX_RULE",
+    "UTILITY",
+    "UTILITY_REGULATORY_SHARE",
     "BUFFETT",
     "BUFFETT_PROFILE",
     "INDUSTRIAL",
@@ -115,6 +130,8 @@ INDUSTRIAL = "industrial"
 BANK = "bank"
 INSURANCE = "insurance"
 REIT = "reit"
+UTILITY = "utility"
+ENERGY = "energy"
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +255,18 @@ REIT_PROPERTY_SHARE = 0.40
 REIT_PPE_SHARE = 0.70
 REIT_DA_SHARE = 0.20
 
+#: Attivi regolatori / totale attivo oltre cui l'azienda vive di tariffe amministrate.
+#: La soglia e' bassa di proposito: gli attivi regolatori sono pochi punti percentuali
+#: dell'attivo anche nelle utility piu' regolate, ma **esistono solo la'**. Qui non si
+#: misura un peso economico, si riconosce una voce che nessun altro settore ha.
+UTILITY_REGULATORY_SHARE = 0.005
+
+#: Spesa di esplorazione / ricavi oltre cui il mestiere e' cercare idrocarburi.
+#: Anche questa e' una soglia di riconoscimento e non di rilevanza: un integrato come una
+#: major ha esplorazione all'1-2% dei ricavi perche' la raffinazione e la distribuzione
+#: gonfiano il denominatore, e resta comunque un E&P nella parte che conta.
+ENERGY_EXPLORATION_SHARE = 0.002
+
 
 def _median(values: Sequence[float]) -> Optional[float]:
     """Mediana di una sequenza gia' ripulita dai ``None``."""
@@ -289,6 +318,12 @@ def detect_sector(
     dell'attivo, oppure immobilizzazioni oltre il 70% dell'attivo **e** ammortamenti
     oltre il 20% dei ricavi. In assenza di tutto, azienda operativa: non si tira a
     indovinare.
+
+    Due profili si riconoscono invece da voci **esclusive**, e per quelli la soglia serve
+    solo a distinguere il dato dallo zero: gli *attivi regolatori* esistono unicamente
+    dove la tariffa e' amministrata (utility), la *spesa di esplorazione* unicamente in
+    chi cerca idrocarburi (E&P). Vengono controllati prima del REIT, perche' tutti e tre
+    hanno molte immobilizzazioni e un marcatore esplicito batte un'euristica.
 
     Quando l'aggregato di riferimento manca (nessun totale attivo, nessun ricavo) la
     materialita' non e' verificabile e si ripiega sulla presenza della voce, ma solo per
@@ -415,6 +450,34 @@ def detect_sector(
         )
         return INSURANCE
 
+    # --- Utility regolate ---------------------------------------------------
+    # Prima del REIT perche' entrambe hanno molte immobilizzazioni: la voce regolatoria
+    # e' un marcatore esplicito e batte l'euristica sull'intensita' di capitale.
+    regulatory_share = _weight_share(
+        balance_rows, BALANCE_ALIASES["regulatory_assets"],
+        balance_rows, BALANCE_ALIASES["total_assets"],
+    )
+    if regulatory_share is not None and regulatory_share > UTILITY_REGULATORY_SHARE:
+        quality.note(
+            f"Settore rilevato: utility regolata (attivi regolatori pari a "
+            f"{regulatory_share:.1%} del totale attivo). Sono costi che il regolatore ha "
+            "autorizzato a recuperare in tariffa: esistono solo dove la tariffa e' "
+            "amministrata."
+        )
+        return UTILITY
+
+    # --- Esplorazione e produzione -----------------------------------------
+    exploration_share = _weight_share(
+        income_rows, INCOME_ALIASES["exploration_expense"],
+        income_rows, INCOME_ALIASES["revenue"],
+    )
+    if exploration_share is not None and exploration_share > ENERGY_EXPLORATION_SHARE:
+        quality.note(
+            f"Settore rilevato: esplorazione e produzione (spesa di esplorazione pari a "
+            f"{exploration_share:.1%} dei ricavi)."
+        )
+        return ENERGY
+
     # --- REIT ---------------------------------------------------------------
     # Si controlla dopo banche e assicurazioni perche' un REIT non ha ne' depositi ne'
     # premi: nessun conflitto possibile.
@@ -474,7 +537,7 @@ def extract_sector_fundamentals(
     quality = quality if quality is not None else _DataQuality()
     # Industriali e REIT usano le voci di bilancio ordinarie: il profilo REIT cambia
     # quali metriche si calcolano (FFO invece dell'utile netto), non quali righe servono.
-    if sector in (INDUSTRIAL, REIT):
+    if sector in (INDUSTRIAL, REIT, UTILITY, ENERGY):
         return fundamentals
 
     income_rows = _row_index(financials.get("income_statement"))
@@ -810,6 +873,215 @@ def _reit_metrics(
     }
 
 
+def _utility_metrics(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: _DataQuality,
+) -> Dict[str, Dict[int, Optional[float]]]:
+    """Metriche di una utility regolata: rendimento concesso, rate base, copertura.
+
+    Perche' il ROIC di una utility non misura un vantaggio competitivo
+    ------------------------------------------------------------------
+    Il rendimento di una utility regolata non lo decide il mercato: lo **fissa il
+    regolatore**, che autorizza un rendimento (l'*allowed ROE*, negli Stati Uniti
+    tipicamente fra il 9% e il 10,5%) sul capitale investito nella rete — la *rate base*.
+    Un ROIC del 6% non e' un segno di debolezza competitiva e un ROIC del 15% non
+    sarebbe un moat: sarebbe un'anomalia destinata a essere riportata in tariffa al
+    prossimo procedimento.
+
+    Ne segue che le domande cambiano. Non "quanto rende il capitale", che e' deciso
+    altrove, ma:
+
+    * il rendimento concesso viene **effettivamente conseguito**? Uno scostamento
+      persistente verso il basso segnala costi fuori controllo o un regolatore ostile;
+    * la **rate base cresce**? E' l'unica fonte di crescita strutturale degli utili: piu'
+      rete in tariffa, piu' utile ammesso. Per questo il CapEx sopra gli ammortamenti e'
+      un segnale positivo, l'opposto di quanto valga per un industriale;
+    * il debito e' **sostenibile**? Una utility e' finanziata al 50-60% da debito per
+      costruzione, e la struttura finanziaria e' approvata dal regolatore: il Debt/Equity
+      non dice nulla. Le agenzie di rating guardano **FFO / debito**, ed e' la metrica
+      che decide il costo del capitale e quindi, indirettamente, la tariffa.
+
+    Cosa non e' ricostruibile
+    -------------------------
+    L'*allowed ROE* e la rate base **vera** vivono nei procedimenti tariffari, non nei
+    bilanci. Qui la rate base e' approssimata dalle **immobilizzazioni nette**, che ne
+    sono la componente dominante ma non l'identica: la rate base esclude i lavori in
+    corso non ancora in tariffa e include il capitale circolante autorizzato. Il
+    rendimento ammesso non c'e' affatto, quindi il modello misura il ROE **conseguito**
+    e la sua stabilita', non lo scostamento dal concesso.
+    """
+    ratios = calculate_balance_sheet_ratios(fundamentals, quality)
+
+    quality.miss(
+        "Rendimento ammesso dal regolatore (allowed ROE) e rate base ufficiale non "
+        "disponibili: vivono nei procedimenti tariffari. Il modello misura il ROE "
+        "conseguito e usa le immobilizzazioni nette come proxy della rate base."
+    )
+
+    def ffo(row: Mapping[str, Optional[float]]) -> Optional[float]:
+        """Utile netto + ammortamenti: la definizione che usano le agenzie di rating."""
+        net_income = row.get("net_income")
+        d_and_a = row.get("d_and_a")
+        if net_income is None or d_and_a is None:
+            return None
+        return net_income + abs(d_and_a)
+
+    funds = _series(fundamentals, ffo)
+
+    return {
+        "roe": _series(fundamentals, lambda r: _safe_div(r.get("net_income"), r.get("equity"), scale=100.0)),
+        "roa": _series(fundamentals, lambda r: _safe_div(r.get("net_income"), r.get("total_assets"), scale=100.0)),
+        # Rendimento sugli asset in tariffa: il proxy del rendimento sulla rate base.
+        "return_on_rate_base": _series(
+            fundamentals, lambda r: _safe_div(r.get("net_income"), r.get("net_ppe"), scale=100.0)
+        ),
+        "operating_margin": _series(
+            fundamentals, lambda r: _safe_div(r.get("operating_income"), r.get("revenue"), scale=100.0)
+        ),
+        "ffo": funds,
+        "ffo_margin": {
+            year: _safe_div(funds.get(year), fundamentals[year].get("revenue"), scale=100.0)
+            for year in fundamentals
+        },
+        # La metrica delle agenzie: sopra il 20% una utility e' solida, sotto il 13% e'
+        # sotto pressione. Decide il rating, e quindi il costo del capitale.
+        "ffo_to_debt": {
+            year: _safe_div(funds.get(year), fundamentals[year].get("total_debt"), scale=100.0)
+            for year in fundamentals
+        },
+        # Sopra 1 la rate base cresce: per una utility e' un segnale positivo, al
+        # contrario di quanto valga per un industriale.
+        "capex_to_depreciation": _series(
+            fundamentals,
+            lambda r: _safe_div(
+                abs(r["capex"]) if r.get("capex") else None,
+                abs(r["d_and_a"]) if r.get("d_and_a") else None,
+            ),
+        ),
+        # La struttura finanziaria e' approvata dal regolatore: si guarda il peso del
+        # debito sul capitale totale, non il Debt/Equity.
+        "debt_to_capital": _series(
+            fundamentals,
+            lambda r: _safe_div(
+                r.get("total_debt"),
+                (r["total_debt"] + r["equity"])
+                if r.get("total_debt") is not None and r.get("equity") is not None else None,
+                scale=100.0,
+            ),
+        ),
+        "debt_to_ebitda": ratios["debt_to_ebitda"],
+        "interest_coverage": ratios["interest_coverage"],
+        "rate_base": _series(fundamentals, lambda r: r.get("net_ppe")),
+        "revenue": _series(fundamentals, lambda r: r.get("revenue")),
+        "net_income": _series(fundamentals, lambda r: r.get("net_income")),
+        "capex": _series(fundamentals, lambda r: abs(r["capex"]) if r.get("capex") else None),
+    }
+
+
+def _energy_metrics(
+    fundamentals: Mapping[int, Mapping[str, Optional[float]]],
+    quality: _DataQuality,
+) -> Dict[str, Dict[int, Optional[float]]]:
+    """Metriche di un'azienda di esplorazione e produzione.
+
+    Perche' l'utile di un E&P non dice quasi nulla
+    ---------------------------------------------
+    Due ragioni, e agiscono insieme.
+
+    La prima e' il **prezzo**. Un produttore di idrocarburi non ha potere sul prezzo di
+    cio' che vende: l'utile dell'anno misura in buona parte dove stava il Brent, non come
+    e' stata gestita l'azienda. Normalizzare su un anno di picco produce un fair value che
+    si sgonfia da solo, e su un anno di minimo l'opposto.
+
+    La seconda e' che **l'attivo si consuma**. Un barile estratto e' un barile che non
+    c'e' piu': il conto economico registra il *depletion*, la quota di riserve esaurita.
+    Un E&P che non rimpiazza cio' che produce sta liquidando se stesso, e puo' farlo per
+    anni mostrando utili eccellenti — sono proprio gli utili della liquidazione.
+
+    Le metriche del settore, e quali sono ricostruibili
+    --------------------------------------------------
+    Il metro vero e' nelle **riserve**: riserve provate, vita residua (R/P), tasso di
+    rimpiazzo, costo di ritrovamento e sviluppo per barile, e il **PV-10**, il valore
+    attuale scontato al 10% dei flussi futuri delle riserve, che le societa' americane
+    devono pubblicare nel 10-K. Nessuno di questi numeri sta nei tre prospetti: vivono
+    nelle tabelle supplementari, e questo modello li vede solo attraverso i depositi
+    XBRL (``--sec``). Quando non ci sono, il profilo lo dichiara e resta su cio' che il
+    bilancio contiene:
+
+    * **EBITDAX** — EBITDA piu' la spesa di esplorazione. Serve perche' chi spesa
+      l'esplorazione e chi la capitalizza (*successful efforts* contro *full cost*) non
+      sono confrontabili sull'EBITDA, e la differenza e' solo una scelta contabile;
+    * **margine di cassa** e **flusso operativo sui ricavi**, che il prezzo sposta ma non
+      falsifica;
+    * **Debt/EBITDAX**, la misura di leva che il settore usa davvero;
+    * **CapEx / flusso operativo** — sopra 1 l'azienda sta finanziando la sostituzione
+      delle riserve con debito o con emissioni.
+    """
+    ratios = calculate_balance_sheet_ratios(fundamentals, quality)
+
+    quality.miss(
+        "Riserve provate, produzione, tasso di rimpiazzo e PV-10 non sono nei prospetti "
+        "finanziari: vivono nelle tabelle supplementari del 10-K. Senza di essi il "
+        "profilo misura la generazione di cassa e la leva, non il valore delle riserve — "
+        "che per un E&P e' l'attivo principale."
+    )
+
+    def ebitdax(row: Mapping[str, Optional[float]]) -> Optional[float]:
+        """EBITDA + esplorazione: neutralizza la scelta fra successful efforts e full cost."""
+        ebitda = row.get("ebitda")
+        if ebitda is None:
+            return None
+        exploration = row.get("exploration_expense")
+        return ebitda + abs(exploration) if exploration is not None else ebitda
+
+    values = _series(fundamentals, ebitdax)
+
+    return {
+        "roe": _series(fundamentals, lambda r: _safe_div(r.get("net_income"), r.get("equity"), scale=100.0)),
+        "roic": _series(
+            fundamentals,
+            lambda r: _safe_div(
+                r["ebit"] * (1.0 - (r.get("tax_rate") or 0.25)) if r.get("ebit") is not None else None,
+                r.get("invested_capital_calc"),
+                scale=100.0,
+            ),
+        ),
+        "ebitdax": values,
+        "ebitdax_margin": {
+            year: _safe_div(values.get(year), fundamentals[year].get("revenue"), scale=100.0)
+            for year in fundamentals
+        },
+        "operating_cash_margin": _series(
+            fundamentals,
+            lambda r: _safe_div(r.get("operating_cash_flow"), r.get("revenue"), scale=100.0),
+        ),
+        # Sopra 1 la sostituzione delle riserve non si autofinanzia.
+        "capex_to_cash_flow": _series(
+            fundamentals,
+            lambda r: _safe_div(
+                abs(r["capex"]) if r.get("capex") else None, r.get("operating_cash_flow")
+            ),
+        ),
+        "debt_to_ebitdax": {
+            year: _safe_div(fundamentals[year].get("total_debt"), values.get(year))
+            for year in fundamentals
+        },
+        "debt_to_equity": ratios["debt_to_equity"],
+        "interest_coverage": ratios["interest_coverage"],
+        "exploration_intensity": _series(
+            fundamentals,
+            lambda r: _safe_div(
+                abs(r["exploration_expense"]) if r.get("exploration_expense") else None,
+                r.get("revenue"), scale=100.0,
+            ),
+        ),
+        "revenue": _series(fundamentals, lambda r: r.get("revenue")),
+        "net_income": _series(fundamentals, lambda r: r.get("net_income")),
+        "operating_cash_flow": _series(fundamentals, lambda r: r.get("operating_cash_flow")),
+        "capex": _series(fundamentals, lambda r: abs(r["capex"]) if r.get("capex") else None),
+    }
+
+
 def build_metrics(
     fundamentals: Mapping[int, Mapping[str, Optional[float]]],
     sector: str,
@@ -823,6 +1095,10 @@ def build_metrics(
         return _insurance_metrics(fundamentals, quality)
     if sector == REIT:
         return _reit_metrics(fundamentals, quality)
+    if sector == UTILITY:
+        return _utility_metrics(fundamentals, quality)
+    if sector == ENERGY:
+        return _energy_metrics(fundamentals, quality)
     raise ValueError(f"build_metrics non si applica al settore '{sector}'.")
 
 
@@ -1095,7 +1371,177 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+
+    UTILITY: {
+        "label": "Utility regolata",
+        "categories": {
+            "profitability": {
+                "label": "Rendimento concesso",
+                "components": {
+                    # Il ROE e' il numero che il regolatore fissa: le soglie sono quelle
+                    # dei rendimenti ammessi tipici (9-10,5% negli Stati Uniti), non
+                    # quelle di un industriale.
+                    "roe": {"label": "ROE medio (%)", "source": ("average", "roe"),
+                            "low": 6.0, "high": 12.0, "weight": 0.35},
+                    # Rendimento sugli asset in tariffa. Con un ROE del 10% e una
+                    # struttura 50/50 il rapporto utile/immobilizzazioni sta intorno al
+                    # 4-5%: le soglie sono tarate su quello.
+                    "return_on_rate_base": {"label": "Utile / rate base (%)",
+                                            "source": ("average", "return_on_rate_base"),
+                                            "low": 2.0, "high": 6.0, "weight": 0.25},
+                    "operating_margin": {"label": "Margine operativo medio (%)",
+                                         "source": ("average", "operating_margin"),
+                                         "low": 10.0, "high": 28.0, "weight": 0.20},
+                    "ffo_margin": {"label": "FFO / ricavi medio (%)",
+                                   "source": ("average", "ffo_margin"),
+                                   "low": 15.0, "high": 35.0, "weight": 0.20},
+                },
+            },
+            "consistency": {
+                "label": "Stabilita' e crescita della rate base",
+                "components": {
+                    # Per una utility la stabilita' non e' una virtu' fra le altre: e'
+                    # la ragione per cui la si compra. La soglia e' piu' severa che per
+                    # un industriale.
+                    "roe_stability": {"label": "Coeff. di variazione ROE",
+                                      "source": ("consistency", "roe", "coefficient_of_variation"),
+                                      "low": 0.35, "high": 0.05, "weight": 0.30},
+                    # Piu' rete in tariffa, piu' utile ammesso: e' l'unica crescita
+                    # strutturale che una utility ha.
+                    "rate_base_growth_years": {"label": "Anni di crescita della rate base (%)",
+                                               "source": ("consistency", "rate_base", "growth_years_pct"),
+                                               "low": 40.0, "high": 100.0, "weight": 0.30},
+                    "profitable_years": {"label": "Anni con utile positivo (%)",
+                                         "source": ("consistency", "net_income", "positive_years_pct"),
+                                         "low": 80.0, "high": 100.0, "weight": 0.20},
+                    "revenue_stability": {"label": "Coeff. di variazione ricavi",
+                                          "source": ("consistency", "revenue", "coefficient_of_variation"),
+                                          "low": 0.30, "high": 0.05, "weight": 0.20},
+                },
+            },
+            "balance_sheet": {
+                "label": "Sostenibilita' del debito",
+                "components": {
+                    # La metrica che decide il rating, e quindi il costo del capitale e
+                    # indirettamente la tariffa. Sopra il 20% solida, sotto il 13%
+                    # sotto pressione.
+                    "ffo_to_debt": {"label": "FFO / debito (%)",
+                                    "source": ("average", "ffo_to_debt"),
+                                    "low": 10.0, "high": 25.0, "weight": 0.40},
+                    # La struttura finanziaria e' approvata dal regolatore: 50-60% di
+                    # debito e' normale, e il Debt/Equity non direbbe nulla.
+                    "debt_to_capital": {"label": "Debito / capitale (%)",
+                                        "source": ("average", "debt_to_capital"),
+                                        "low": 70.0, "high": 45.0, "weight": 0.30},
+                    "interest_coverage": {"label": "Interest Coverage medio",
+                                          "source": ("average", "interest_coverage"),
+                                          "low": 2.0, "high": 5.0, "weight": 0.30},
+                },
+            },
+        },
+    },
+
+    ENERGY: {
+        "label": "Esplorazione e produzione",
+        "categories": {
+            "profitability": {
+                "label": "Generazione di cassa",
+                "components": {
+                    # EBITDAX invece dell'EBITDA: chi spesa l'esplorazione e chi la
+                    # capitalizza non sono confrontabili, e la differenza e' contabile.
+                    "ebitdax_margin": {"label": "EBITDAX / ricavi medio (%)",
+                                       "source": ("average", "ebitdax_margin"),
+                                       "low": 20.0, "high": 55.0, "weight": 0.35},
+                    "operating_cash_margin": {"label": "Flusso operativo / ricavi (%)",
+                                              "source": ("average", "operating_cash_margin"),
+                                              "low": 15.0, "high": 45.0, "weight": 0.30},
+                    # Il ROIC su un ciclico va letto sulla media del ciclo, ed e' per
+                    # questo che entra con soglie larghe e peso contenuto.
+                    "roic": {"label": "ROIC medio di ciclo (%)",
+                             "source": ("average", "roic"),
+                             "low": 2.0, "high": 18.0, "weight": 0.20},
+                    "roe": {"label": "ROE medio (%)", "source": ("average", "roe"),
+                            "low": 2.0, "high": 20.0, "weight": 0.15},
+                },
+            },
+            "consistency": {
+                "label": "Tenuta nel ciclo",
+                "components": {
+                    # Su un ciclico la domanda non e' se l'utile oscilla — oscilla per
+                    # forza — ma se resta positivo anche in fondo al ciclo.
+                    "profitable_years": {"label": "Anni con utile positivo (%)",
+                                         "source": ("consistency", "net_income", "positive_years_pct"),
+                                         "low": 50.0, "high": 100.0, "weight": 0.35},
+                    "cash_flow_stability": {"label": "Coeff. di variazione flusso operativo",
+                                            "source": ("consistency", "operating_cash_flow",
+                                                       "coefficient_of_variation"),
+                                            "low": 0.80, "high": 0.20, "weight": 0.25},
+                    # Il margine di cassa dice quanto e' efficiente l'estrazione, e a
+                    # differenza dell'utile non e' azzerato dalle svalutazioni.
+                    "margin_stability": {"label": "Coeff. di variazione margine EBITDAX",
+                                         "source": ("consistency", "ebitdax_margin",
+                                                    "coefficient_of_variation"),
+                                         "low": 0.60, "high": 0.15, "weight": 0.20},
+                    "revenue_growth_years": {"label": "Anni di crescita dei ricavi (%)",
+                                             "source": ("consistency", "revenue", "growth_years_pct"),
+                                             "low": 30.0, "high": 80.0, "weight": 0.20},
+                },
+            },
+            "balance_sheet": {
+                "label": "Leva e autofinanziamento",
+                "components": {
+                    # La leva su un ciclico va misurata larga: il denominatore crolla
+                    # proprio quando serve.
+                    "debt_to_ebitdax": {"label": "Debt / EBITDAX medio",
+                                        "source": ("average", "debt_to_ebitdax"),
+                                        "low": 3.50, "high": 0.80, "weight": 0.40},
+                    # Sopra 1 la sostituzione delle riserve e' finanziata da debito o da
+                    # emissioni: e' il modo in cui un E&P si consuma senza sembrarlo.
+                    "capex_to_cash_flow": {"label": "CapEx / flusso operativo",
+                                           "source": ("average", "capex_to_cash_flow"),
+                                           "low": 1.30, "high": 0.60, "weight": 0.35},
+                    "interest_coverage": {"label": "Interest Coverage medio",
+                                          "source": ("average", "interest_coverage"),
+                                          "low": 2.0, "high": 12.0, "weight": 0.25},
+                },
+            },
+        },
+    },
 }
+
+#: Come stimare il CapEx **di mantenimento** in ciascun profilo.
+#:
+#: Il metodo Greenwald (immobilizzazioni/ricavi x incremento dei ricavi) e' pensato per
+#: aziende in cui quel rapporto vale 0,3-1,0. Sopra quel livello si rompe, e si rompe
+#: sempre nella stessa direzione: attribuisce alla crescita piu' CapEx di quanto
+#: l'azienda ne spenda, il mantenimento risulta troppo basso o nullo, e gli Owner
+#: Earnings escono **gonfiati**. Misurato sui bilanci di prova:
+#:
+#: ===========  ==============  ==================  ===================
+#: profilo      PPE / ricavi    mant. Greenwald     riferimento
+#: ===========  ==============  ==================  ===================
+#: industriale  0,3 - 1,0       attendibile         --
+#: utility      2,75            314 su 704          ammortamenti
+#: E&P          1,89            **zero** su 900     CapEx totale
+#: REIT         6 - 7           **zero**            CapEx totale
+#: ===========  ==============  ==================  ===================
+#:
+#: Le convenzioni alternative non sono ripieghi generici, hanno un senso di settore:
+#:
+#: ``"depreciation"`` (utility) — una rete si rinnova al ritmo del proprio deprezzamento;
+#:     quello che si spende in piu' entra in tariffa e produce utile aggiuntivo, quindi e'
+#:     crescita vera e va tenuta fuori dal mantenimento;
+#: ``"total"`` (E&P, REIT) — per un E&P il CapEx serve a rimpiazzare le riserve prodotte,
+#:     e chi ne spende meno sta liquidando l'azienda mostrando utili; per un REIT vale il
+#:     ragionamento gia' fatto sugli AFFO. In entrambi i casi la stima e' prudenziale e
+#:     va dichiarata.
+MAINTENANCE_CAPEX_RULE: Dict[str, str] = {
+    INDUSTRIAL: "greenwald",
+    UTILITY: "depreciation",
+    ENERGY: "total",
+    REIT: "total",
+}
+
 
 #: Metriche su cui calcolare le statistiche di consistenza, per settore.
 CONSISTENCY_TARGETS: Dict[str, Tuple[str, ...]] = {
@@ -1107,6 +1553,10 @@ CONSISTENCY_TARGETS: Dict[str, Tuple[str, ...]] = {
                 "premiums_earned", "net_income", "investment_yield"),
     REIT: ("ffo", "affo", "ffo_per_share", "affo_per_share", "ffo_margin",
            "affo_margin", "ffo_to_assets", "revenue", "net_income"),
+    UTILITY: ("roe", "return_on_rate_base", "operating_margin", "ffo_margin",
+              "ffo_to_debt", "rate_base", "revenue", "net_income"),
+    ENERGY: ("ebitdax_margin", "operating_cash_margin", "roic", "roe",
+             "operating_cash_flow", "revenue", "net_income"),
 }
 
 #: Metriche di cui calcolare la media, per settore.
@@ -1123,6 +1573,12 @@ AVERAGE_TARGETS: Dict[str, Tuple[str, ...]] = {
     REIT: ("ffo", "affo", "ffo_per_share", "affo_per_share", "ffo_margin", "affo_margin",
            "ffo_to_assets", "ffo_payout", "debt_to_assets", "debt_to_ebitda",
            "interest_coverage"),
+    UTILITY: ("roe", "roa", "return_on_rate_base", "operating_margin", "ffo_margin",
+              "ffo_to_debt", "capex_to_depreciation", "debt_to_capital", "debt_to_ebitda",
+              "interest_coverage"),
+    ENERGY: ("ebitdax_margin", "operating_cash_margin", "roic", "roe",
+             "capex_to_cash_flow", "debt_to_ebitdax", "debt_to_equity",
+             "interest_coverage", "exploration_intensity"),
 }
 
 #: Righe della tabella anno per anno nel report: (etichetta, metrica, formato).
@@ -1164,6 +1620,33 @@ TABLE_ROWS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
         ("Debt / EBITDA", "debt_to_ebitda", "ratio"),
         ("Interest Coverage", "interest_coverage", "ratio"),
         ("Ammortamenti", "d_and_a", "big"), ("CapEx totale", "capex", "big"),
+    ),
+    UTILITY: (
+        ("Ricavi", "revenue", "big"), ("Utile netto", "net_income", "big"),
+        ("FFO", "ffo", "big"), ("Rate base (proxy)", "rate_base", "big"),
+        ("ROE %", "roe", "pct"), ("Utile / rate base %", "return_on_rate_base", "pct"),
+        ("Margine operativo %", "operating_margin", "pct"),
+        ("FFO / ricavi %", "ffo_margin", "pct"),
+        ("FFO / debito %", "ffo_to_debt", "pct"),
+        ("CapEx / ammortamenti", "capex_to_depreciation", "ratio"),
+        ("Debito / capitale %", "debt_to_capital", "pct"),
+        ("Debt / EBITDA", "debt_to_ebitda", "ratio"),
+        ("Interest Coverage", "interest_coverage", "ratio"),
+        ("CapEx", "capex", "big"),
+    ),
+    ENERGY: (
+        ("Ricavi", "revenue", "big"), ("Utile netto", "net_income", "big"),
+        ("EBITDAX", "ebitdax", "big"),
+        ("Flusso operativo", "operating_cash_flow", "big"),
+        ("EBITDAX / ricavi %", "ebitdax_margin", "pct"),
+        ("Flusso op. / ricavi %", "operating_cash_margin", "pct"),
+        ("ROIC %", "roic", "pct"), ("ROE %", "roe", "pct"),
+        ("Esplorazione / ricavi %", "exploration_intensity", "pct"),
+        ("CapEx / flusso operativo", "capex_to_cash_flow", "ratio"),
+        ("Debt / EBITDAX", "debt_to_ebitdax", "ratio"),
+        ("Debt / Equity", "debt_to_equity", "ratio"),
+        ("Interest Coverage", "interest_coverage", "ratio"),
+        ("CapEx", "capex", "big"),
     ),
     INSURANCE: (
         ("Premi", "premiums_earned", "big"), ("Ricavi", "revenue", "big"),

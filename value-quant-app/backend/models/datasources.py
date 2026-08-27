@@ -13,7 +13,9 @@ sul modello:
   tangibile, poco o nessun debito, debito ripagabile con gli Owner Earnings;
 * mancano ``Goodwill`` e gli immateriali -> il capitale tangibile diventa una stima;
 * la storia si ferma a 4-5 esercizi -> le metriche di consistenza perdono significato e
-  la capitalizzazione della R&S deve estrapolare gli anni che non ci sono.
+  la capitalizzazione della R&S deve estrapolare gli anni che non ci sono;
+* mancano i marcatori di settore (attivi regolatori, spesa di esplorazione) -> il profilo
+  giusto non viene riconosciuto e l'azienda finisce misurata col metro industriale.
 
 Con **cinque o sei voci per emittente** si copre quasi tutto. Il problema e' mirato, non
 sistemico, e per questo vale la pena risolverlo alla fonte invece di aggiungere proxy.
@@ -262,6 +264,37 @@ SEC_TAGS: Tuple[Dict[str, Any], ...] = (
         "tags": (
             "RealEstateInvestmentPropertyNet",
             "RealEstateInvestmentPropertyAtCost",
+        ),
+    },
+    # --- Voci delle utility regolate ---------------------------------------
+    # E' il marcatore del profilo: se la SEC lo espone, il rilevamento funziona anche
+    # dove yfinance non riporta la voce.
+    {
+        "field": "regulatory_assets", "statement": "balance_sheet",
+        "label": "Regulatory Assets",
+        "tags": (
+            "RegulatoryAssetsNoncurrent",
+            "RegulatoryAssets",
+            "PublicUtilitiesPropertyPlantAndEquipmentRegulatoryAsset",
+        ),
+    },
+    # --- Voci degli E&P ----------------------------------------------------
+    {
+        "field": "exploration_expense", "statement": "income_statement",
+        "label": "Exploration Expense",
+        "tags": (
+            "ExplorationExpenseMineral",
+            "ExplorationExpense",
+            "ExplorationAbandonmentAndDryHoleCosts",
+            "ResultsOfOperationsExplorationExpense",
+        ),
+    },
+    {
+        "field": "operating_cash_flow", "statement": "cash_flow",
+        "label": "Operating Cash Flow",
+        "tags": (
+            "NetCashProvidedByUsedInOperatingActivities",
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
         ),
     },
     # --- Voci assicurative -------------------------------------------------

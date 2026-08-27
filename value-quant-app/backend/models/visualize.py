@@ -138,6 +138,16 @@ STRINGS: Dict[str, Tuple[str, str]] = {
     "metric_ffo_payout": ("Dividendi / FFO %", "Dividends / FFO %"),
     "metric_ffo_to_assets": ("FFO / attivo %", "FFO / assets %"),
     "metric_debt_to_assets": ("Debito / attivo %", "Debt / assets %"),
+    "metric_rate_base": ("Rate base (proxy)", "Rate base (proxy)"),
+    "metric_return_on_rate_base": ("Utile / rate base %", "Return on rate base %"),
+    "metric_ffo_to_debt": ("FFO / debito %", "FFO / debt %"),
+    "metric_capex_to_dep": ("CapEx / ammortamenti", "CapEx / depreciation"),
+    "metric_debt_to_capital": ("Debito / capitale %", "Debt / capital %"),
+    "metric_ebitdax_margin": ("EBITDAX / ricavi %", "EBITDAX / revenue %"),
+    "metric_ebitdax": ("EBITDAX", "EBITDAX"),
+    "metric_cash_margin": ("Flusso op. / ricavi %", "Operating cash / revenue %"),
+    "metric_capex_to_cash": ("CapEx / flusso operativo", "CapEx / operating cash"),
+    "metric_debt_to_ebitdax": ("Debt / EBITDAX", "Debt / EBITDAX"),
     "col_quality_score": ("Quality Score", "Quality Score"),
     "col_profitability": ("Profittabilita'", "Profitability"),
     "col_consistency": ("Consistenza", "Consistency"),
@@ -231,6 +241,22 @@ HISTORY_METRICS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
         ("cost_of_risk", "metric_cost_of_risk", "%"),
         ("loan_to_deposit", "metric_loan_deposit", "x"),
     ),
+    "utility": (
+        ("roe", "metric_roe", "%"),
+        ("return_on_rate_base", "metric_return_on_rate_base", "%"),
+        ("rate_base", "metric_rate_base", "abs"),
+        ("ffo_to_debt", "metric_ffo_to_debt", "%"),
+        ("capex_to_depreciation", "metric_capex_to_dep", "x"),
+        ("debt_to_capital", "metric_debt_to_capital", "%"),
+    ),
+    "energy": (
+        ("ebitdax_margin", "metric_ebitdax_margin", "%"),
+        ("operating_cash_margin", "metric_cash_margin", "%"),
+        ("ebitdax", "metric_ebitdax", "abs"),
+        ("roic", "axis_roic", "%"),
+        ("capex_to_cash_flow", "metric_capex_to_cash", "x"),
+        ("debt_to_ebitdax", "metric_debt_to_ebitdax", "x"),
+    ),
     "reit": (
         ("ffo_margin", "metric_ffo_margin", "%"),
         ("affo_margin", "metric_affo_margin", "%"),
@@ -307,6 +333,18 @@ RADAR_LABELS: Dict[str, Tuple[str, str]] = {
     "affo_stability": ("Stabilita' AFFO", "AFFO stability"),
     "positive_ffo_years": ("Anni con FFO", "Positive FFO years"),
     "debt_to_assets": ("Debito/attivo", "Debt/assets"),
+    # utility regolate
+    "return_on_rate_base": ("Rend. rate base", "Return on rate base"),
+    "ffo_to_debt": ("FFO/debito", "FFO/debt"),
+    "debt_to_capital": ("Debito/capitale", "Debt/capital"),
+    "rate_base_growth_years": ("Crescita rate base", "Rate base growth"),
+    "revenue_stability": ("Stabilita' ricavi", "Revenue stability"),
+    # esplorazione e produzione
+    "ebitdax_margin": ("Margine EBITDAX", "EBITDAX margin"),
+    "operating_cash_margin": ("Margine di cassa", "Cash margin"),
+    "capex_to_cash_flow": ("CapEx/cassa", "CapEx/cash flow"),
+    "debt_to_ebitdax": ("Debito/EBITDAX", "Debt/EBITDAX"),
+    "cash_flow_stability": ("Stabilita' cassa", "Cash flow stability"),
 }
 
 

@@ -128,6 +128,16 @@ INCOME_ALIASES: Dict[str, Sequence[str]] = {
         "Research And Development", "Research Development",
         "Research And Development Expenses",
     ),
+    # Marcatore degli E&P: chi cerca idrocarburi spesa (o capitalizza) l'esplorazione, e
+    # nessun altro settore ha questa voce.
+    "exploration_expense": (
+        "Exploration Expense", "Exploration Abandonment Dry Hole Expense",
+        "Exploration And Production Expense", "Exploration Costs",
+    ),
+    "depletion": (
+        "Depletion", "Depreciation Depletion And Amortization",
+        "Depletion Of Oil And Gas Properties",
+    ),
 }
 
 BALANCE_ALIASES: Dict[str, Sequence[str]] = {
@@ -156,6 +166,14 @@ BALANCE_ALIASES: Dict[str, Sequence[str]] = {
     "tangible_book_value": ("Tangible Book Value", "Net Tangible Assets"),
     # Servono per il CapEx di mantenimento (rapporto immobilizzazioni/ricavi) e per il
     # rendimento sul capitale **tangibile**, che e' il metro di Buffett.
+    # Marcatore delle utility regolate. Gli "attivi regolatori" sono costi che il
+    # regolatore ha autorizzato a recuperare in tariffa negli anni successivi: non
+    # esistono fuori da un settore a tariffa amministrata, e per questo identificano il
+    # profilo meglio di qualunque euristica sull'intensita' di capitale.
+    "regulatory_assets": (
+        "Regulatory Assets", "Regulatory Assets Noncurrent",
+        "Total Regulatory Assets", "Regulatory Asset",
+    ),
     # Il marcatore del profilo REIT: gli immobili sono l'attivo, non un supporto
     # all'attivita'. Quando la voce esiste ed e' materiale, il profilo cambia.
     "real_estate": (

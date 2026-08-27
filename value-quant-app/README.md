@@ -13,14 +13,14 @@ value-quant-app/
 │   ├── quality_score.py         "e' una buona azienda?"      -> punteggio 0-100
 │   ├── valuation.py             "a che prezzo vale la pena?" -> fair value e sconto
 │   ├── backtest.py              "questa regola ha funzionato?" -> equity curve e rischio
-│   ├── sectors.py               profili industriale / banca / assicurazione / REIT
+│   ├── sectors.py               6 profili di settore, riconosciuti dal bilancio
 │   ├── datasources.py           SEC EDGAR e override manuali per le voci mancanti
 │   └── visualize.py             tear sheet e grafici in tema scuro
 ├── docs/
 │   ├── COMANDI.md               guida rapida a tutte le opzioni
 │   ├── METODOLOGIA.md           formule, soglie e come si leggono i numeri
 │   └── md2pdf.py                rigenera il PDF della metodologia dal Markdown
-└── tests/                       113 test offline, nessuna rete richiesta
+└── tests/                       127 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
@@ -102,7 +102,7 @@ banche, assicurazioni, asset manager e borse, soggetti che vogliono trattamenti 
 Conta il peso e non la semplice presenza della voce perche' yfinance riporta "Net
 Interest Income" anche per gli industriali con la tesoreria piena: sulla sola presenza di
 quella riga Alphabet finiva nel profilo bancario, dove ROIC e Owner Earnings non vengono
-nemmeno calcolati. Si puo' comunque forzare con `--sector bank|insurance|reit|industrial`.
+nemmeno calcolati. Si puo' comunque forzare con `--sector bank|insurance|reit|utility|energy|industrial`.
 
 ```bash
 python run_analysis.py JPM                      # profilo bancario riconosciuto da solo
@@ -320,7 +320,7 @@ Le approssimazioni tipiche:
 
 ## Test
 
-113 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
+127 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
 
 ```bash
 python tests/test_quality_score.py    # metriche di bilancio e consistenza
@@ -331,6 +331,7 @@ python tests/test_buffett.py          # criteri di Berkshire, CapEx di mantenime
 python tests/test_research.py         # capitalizzazione della R&S (verifiche analitiche)
 python tests/test_reit.py             # profilo REIT: FFO, AFFO, rilevamento
 python tests/test_datasources.py      # SEC EDGAR (XBRL) e override manuali
+python tests/test_utility_energy.py   # profili utility regolata ed E&P
 python tests/test_pipeline.py         # integrazione: i grafici sui dizionari reali
 ```
 

@@ -413,3 +413,136 @@ def make_reit(
         "years": list(years),
         "data_quality": {"notes": [], "estimated": [], "missing": []},
     }
+
+
+def make_utility(
+    ticker: str = "RETE",
+    *,
+    allowed_roe: float = 0.098,
+    debt_share: float = 0.55,
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """Utility regolata: rendimento fissato dal regolatore e rate base in crescita.
+
+    Numeri di riferimento (esercizio piu' recente): ricavi 8000, utile netto 1078,
+    immobilizzazioni 22000 (la rate base), ROE 9.8% — il rendimento ammesso tipico —
+    e debito al 55% del capitale, la struttura che il regolatore approva.
+
+    La voce "Regulatory Assets" e' il marcatore del profilo: esiste solo dove la tariffa
+    e' amministrata.
+    """
+    count = len(years)
+    step = [1.0 + 0.045 * k for k in range(count)]
+
+    revenue = [8000e6 / s for s in step]
+    # La rate base cresce piu' dei ricavi: e' il motore degli utili di una utility.
+    rate_base = [22000e6 / (1.0 + 0.06 * k) for k in range(count)]
+    equity = [base * 0.45 * 1.11 for base in rate_base]
+    net_income = [e * allowed_roe for e in equity]
+    debt = [e * debt_share / (1.0 - debt_share) for e in equity]
+    depreciation = [base * 0.032 for base in rate_base]
+
+    return {
+        "ticker": ticker,
+        "company_name": f"Utility {ticker}",
+        "currency": "USD",
+        "income_statement": frame({
+            "Total Revenue": revenue,
+            "Operating Income": [value * 0.245 for value in revenue],
+            "Pretax Income": [value * 1.28 for value in net_income],
+            "Tax Provision": [value * 0.28 for value in net_income],
+            "Net Income": net_income,
+            "Interest Expense": [value * 0.045 for value in debt],
+        }, years),
+        "balance_sheet": frame({
+            "Total Assets": [base * 1.28 for base in rate_base],
+            "Total Liabilities Net Minority Interest": [
+                base * 1.28 - e for base, e in zip(rate_base, equity)
+            ],
+            "Stockholders Equity": equity,
+            "Net PPE": rate_base,
+            # Il marcatore: pochi punti dell'attivo, ma esiste solo qui.
+            "Regulatory Assets": [base * 0.035 for base in rate_base],
+            "Total Debt": debt,
+            "Cash And Cash Equivalents": [value * 0.02 for value in revenue],
+            "Current Assets": [value * 0.18 for value in revenue],
+            "Current Liabilities": [value * 0.22 for value in revenue],
+            "Ordinary Shares Number": [700e6] * count,
+        }, years),
+        "cash_flow": frame({
+            "Depreciation And Amortization": depreciation,
+            # CapEx sopra gli ammortamenti: la rate base cresce, ed e' il segnale
+            # positivo di una utility (l'opposto che per un industriale).
+            "Capital Expenditure": [-d * 1.75 for d in depreciation],
+            "Change In Working Capital": [value * 0.002 for value in revenue],
+            "Operating Cash Flow": [n + d for n, d in zip(net_income, depreciation)],
+            "Cash Dividends Paid": [-n * 0.62 for n in net_income],
+        }, years),
+        "years": list(years),
+        "data_quality": {"notes": [], "estimated": [], "missing": []},
+    }
+
+
+def make_energy(
+    ticker: str = "PETROLIO",
+    *,
+    prices: Sequence[float] = (1.0, 0.82, 1.18, 0.74, 0.45, 0.86),
+    years: Sequence[int] = tuple(YEARS),
+) -> Dict[str, object]:
+    """Esplorazione e produzione: l'utile segue il prezzo, non la gestione.
+
+    ``prices`` e' il fattore di prezzo anno per anno, dal piu' recente al piu' vecchio: il
+    2020 al 45% serve a riprodurre un fondo di ciclo, dove l'utile crolla mentre il flusso
+    di cassa operativo resta positivo. E' la differenza che il profilo esiste per mostrare.
+
+    La voce "Exploration Expense" e' il marcatore: nessun altro settore ce l'ha.
+    """
+    count = len(years)
+    base_production = 3000e6
+
+    revenue = [base_production * price for price in prices]
+    exploration = [value * 0.035 for value in revenue]
+    depreciation = [base_production * 0.28] * count      # il depletion segue i volumi
+    operating_income = [
+        r - d - e - base_production * 0.30
+        for r, d, e in zip(revenue, depreciation, exploration)
+    ]
+    net_income = [value * 0.72 for value in operating_income]
+    equity = [4200e6 / (1.0 + 0.03 * k) for k in range(count)]
+    debt = [2100e6] * count
+
+    return {
+        "ticker": ticker,
+        "company_name": f"Energia {ticker}",
+        "currency": "USD",
+        "income_statement": frame({
+            "Total Revenue": revenue,
+            "Operating Income": operating_income,
+            "Exploration Expense": exploration,
+            "Pretax Income": [value * 0.98 for value in operating_income],
+            "Tax Provision": [value * 0.98 * 0.26 for value in operating_income],
+            "Net Income": net_income,
+            "Interest Expense": [value * 0.055 for value in debt],
+        }, years),
+        "balance_sheet": frame({
+            "Total Assets": [e + d + 400e6 for e, d in zip(equity, debt)],
+            "Total Liabilities Net Minority Interest": [d + 400e6 for d in debt],
+            "Stockholders Equity": equity,
+            "Net PPE": [e * 1.35 for e in equity],
+            "Total Debt": debt,
+            "Cash And Cash Equivalents": [300e6] * count,
+            "Current Assets": [value * 0.22 for value in revenue],
+            "Current Liabilities": [value * 0.20 for value in revenue],
+            "Ordinary Shares Number": [900e6] * count,
+        }, years),
+        "cash_flow": frame({
+            "Depreciation And Amortization": depreciation,
+            "Capital Expenditure": [-value * 0.30 for value in revenue],
+            "Change In Working Capital": [value * 0.004 for value in revenue],
+            "Operating Cash Flow": [
+                n + d for n, d in zip(net_income, depreciation)
+            ],
+        }, years),
+        "years": list(years),
+        "data_quality": {"notes": [], "estimated": [], "missing": []},
+    }

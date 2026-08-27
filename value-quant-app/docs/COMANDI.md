@@ -24,7 +24,7 @@ Senza ticker analizza `AAPL`. I ticker si separano con uno spazio, maiuscole o m
 | Flag | Argomento | Default | Cosa fa |
 |---|---|---|---|
 | `--buffett` | — | off | Criteri e tasso di sconto di Buffett, più la scorecard |
-| `--sector` | `industrial` \| `bank` \| `insurance` \| `reit` | auto | Forza il profilo invece del riconoscimento automatico |
+| `--sector` | `industrial` \| `bank` \| `insurance` \| `reit` \| `utility` \| `energy` | auto | Forza il profilo invece del riconoscimento automatico |
 | `--sec` | flag | off | Completa le voci mancanti con i depositi XBRL della SEC (solo emittenti USA) |
 | `--overrides` | percorso | — | File JSON/YAML con voci di bilancio inserite a mano |
 | `--capitalize-rd` | flag | off | Tratta la R&S come investimento invece che come costo (Damodaran) |
@@ -168,6 +168,43 @@ forza con `--sector industrial`.
 Nella valutazione il DCF sconta gli **AFFO** invece degli Owner Earnings, e l'EPV esce
 dalla sintesi: assume crescita zero, mentre i canoni seguono l'inflazione.
 
+### Utility regolate ed energia
+
+Due settori in cui le metriche standard misurano qualcosa che non è quello che sembra,
+per ragioni opposte.
+
+In una **utility regolata** il rendimento non lo decide il mercato ma il regolatore, che
+autorizza un ROE (tipicamente 9-10,5%) sul capitale investito nella rete. Un ROIC basso
+non è debolezza competitiva e uno alto non sarebbe un moat: sarebbe un'anomalia destinata
+a essere riportata in tariffa. Le domande diventano: il rendimento concesso viene
+conseguito, la rate base cresce, il debito è sostenibile (`FFO / debito`, la metrica che
+usano le agenzie di rating).
+
+In un **E&P** l'utile dell'anno misura in buona parte dove stava il prezzo del greggio, e
+l'attivo si consuma mentre lo si sfrutta: chi non rimpiazza le riserve può mostrare utili
+eccellenti per anni — sono gli utili della liquidazione. Il profilo usa **EBITDAX** (che
+neutralizza la scelta contabile fra *successful efforts* e *full cost*), il margine di
+cassa, `Debt/EBITDAX` e `CapEx / flusso operativo`.
+
+```bash
+python run_analysis.py NEE DUK SO                   # utility, riconosciute da sole
+python run_analysis.py EOG DVN                      # E&P
+python run_analysis.py NEE --sector industrial      # per vedere quanto cambia il metro
+```
+
+Il riconoscimento usa due voci **esclusive**: gli *attivi regolatori* (costi che il
+regolatore ha autorizzato a recuperare in tariffa) esistono solo dove la tariffa è
+amministrata, la *spesa di esplorazione* solo in chi cerca idrocarburi. Se il bilancio non
+le espone, `--sec` spesso le recupera dai depositi XBRL; altrimenti si forza con
+`--sector`.
+
+**Un limite che il profilo dichiara:** per l'E&P riserve provate, produzione e PV-10 non
+stanno nei prospetti finanziari — vivono nelle tabelle supplementari del 10-K. Senza di
+essi il modello misura la generazione di cassa e la leva, non il valore delle riserve, che
+per un E&P è l'attivo principale. Per la utility mancano l'*allowed ROE* e la rate base
+ufficiale, che vivono nei procedimenti tariffari: la rate base è approssimata dalle
+immobilizzazioni nette.
+
 ### Banche, assicurazioni, holding
 
 Il profilo si riconosce da solo dal **peso** delle voci di bilancio: banca se i depositi
@@ -256,6 +293,7 @@ python tests/test_buffett.py
 python tests/test_research.py
 python tests/test_reit.py
 python tests/test_datasources.py
+python tests/test_utility_energy.py
 python tests/test_pipeline.py
 ```
 

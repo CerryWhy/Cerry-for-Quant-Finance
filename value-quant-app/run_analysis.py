@@ -13,6 +13,8 @@ Esempi::
     python run_analysis.py JPM               # profilo bancario riconosciuto da solo
     python run_analysis.py BRK-B --sector insurance   # profilo forzato a mano
     python run_analysis.py O SPG                     # profilo REIT: FFO e AFFO
+    python run_analysis.py NEE DUK                   # profilo utility: FFO/debito, rate base
+    python run_analysis.py EOG DVN                   # profilo E&P: EBITDAX, cassa nel ciclo
     python run_analysis.py JPM --sec                 # voci mancanti da SEC EDGAR
     python run_analysis.py ENI.MI --overrides dati/miei.json   # voci inserite a mano
     python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
