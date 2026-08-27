@@ -6,9 +6,10 @@ yfinance e' gratuito e fa quello che puo', ma su alcune voci **non arriva mai**,
 sono voci marginali: sono quelle da cui dipendono interi blocchi di giudizio. Misurato
 sul modello:
 
-* manca ``Net Loan`` (impieghi netti) -> cadono **due componenti su tre** della categoria
-  "capitale e rischio di credito" del profilo bancario: impieghi/depositi e costo del
-  credito. La copertura di quella categoria scende al 40%;
+* manca ``Net Loan`` (impieghi netti) -> cadono impieghi/depositi e costo del credito,
+  cioe' **due delle tre componenti** che la categoria "capitale e rischio di credito"
+  puo' ricostruire dal bilancio consolidato: la sua copertura scende dal 55% al 20%,
+  e il giudizio patrimoniale resta appeso al solo patrimonio/attivo;
 * manca ``Total Debt`` -> cadono **tre regole Buffett su sette**: rendimento sul capitale
   tangibile, poco o nessun debito, debito ripagabile con gli Owner Earnings;
 * mancano ``Goodwill`` e gli immateriali -> il capitale tangibile diventa una stima;
@@ -72,8 +73,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -94,10 +97,14 @@ except ImportError:  # esecuzione come script standalone
 
 
 __all__ = [
+    "FDIC_FIELDS",
     "SEC_TAGS",
     "enrich_financials",
+    "fdic_cert_from_overrides",
+    "fetch_fdic_ratios",
     "fetch_sec_companyfacts",
     "load_overrides",
+    "search_fdic_institutions",
     "sec_rows",
 ]
 
@@ -340,8 +347,18 @@ def _cache_dir(explicit: Optional[str] = None) -> str:
     return path
 
 
-def _get_json(url: str, quality: _DataQuality, timeout: float = 30.0) -> Optional[Any]:
-    """GET con User-Agent, rate limit e nessuna eccezione propagata."""
+def _get_json(
+    url: str,
+    quality: _DataQuality,
+    timeout: float = 30.0,
+    source: str = "SEC EDGAR",
+) -> Optional[Any]:
+    """GET con User-Agent, rate limit e nessuna eccezione propagata.
+
+    ``source`` compare nei messaggi di ``data_quality``: la funzione serve sia a EDGAR sia
+    a BankFind, e un errore attribuito alla fonte sbagliata manda a cercare il problema
+    dove non e'.
+    """
     global _last_request
     elapsed = time.monotonic() - _last_request
     if elapsed < SEC_MIN_INTERVAL:
@@ -363,17 +380,17 @@ def _get_json(url: str, quality: _DataQuality, timeout: float = 30.0) -> Optiona
         _last_request = time.monotonic()
         if exc.code == 403:
             quality.miss(
-                "SEC EDGAR ha risposto 403: serve un User-Agent che identifichi chi "
-                "chiama. Impostare la variabile d'ambiente SEC_USER_AGENT "
-                "(es. \"Nome Cognome nome@dominio.it\")."
+                f"{source} ha risposto 403. Per SEC EDGAR serve un User-Agent che "
+                "identifichi chi chiama: impostare la variabile d'ambiente "
+                "SEC_USER_AGENT (es. \"Nome Cognome nome@dominio.it\")."
             )
         elif exc.code == 404:
-            quality.miss(f"SEC EDGAR: risorsa non trovata ({url}).")
+            quality.miss(f"{source}: risorsa non trovata ({url}).")
         else:
-            quality.miss(f"SEC EDGAR: errore HTTP {exc.code}.")
+            quality.miss(f"{source}: errore HTTP {exc.code}.")
     except Exception as exc:  # pragma: no cover - dipende dalla rete
         _last_request = time.monotonic()
-        quality.miss(f"SEC EDGAR non raggiungibile: {exc}")
+        quality.miss(f"{source} non raggiungibile: {exc}")
     return None
 
 
@@ -866,10 +883,306 @@ def enrich_financials(
     return result
 
 
+# ---------------------------------------------------------------------------
+# 4. FDIC BankFind: i ratios di vigilanza veri
+# ---------------------------------------------------------------------------
+#
+# Il profilo bancario usa patrimonio/attivo e costo del credito come **proxy** di
+# solidita' patrimoniale e qualita' del credito, e lo dichiara. I numeri veri — CET1,
+# prestiti deteriorati — non stanno nei bilanci consolidati: vivono nelle segnalazioni di
+# vigilanza. Per le banche americane sono pubblici e gratuiti nell'API BankFind della
+# FDIC.
+#
+# Due difficolta', entrambe reali:
+#
+# 1. **l'entita' quotata non e' l'entita' assicurata.** JPMorgan Chase & Co. e' una
+#    holding; l'ente che deposita alla FDIC e' JPMorgan Chase Bank, N.A., con un proprio
+#    numero di certificato. Nessuna regola automatica lega il ticker al certificato in
+#    modo affidabile — i gruppi grandi controllano piu' banche — quindi qui non si
+#    indovina: si cerca, si mostrano i candidati, e il certificato lo fissa chi analizza,
+#    una volta, nel file di override;
+# 2. **i nomi dei campi.** L'API usa i codici del Call Report (``RBC1RWAJ``, ``NCLNLSR``)
+#    che cambiano nel tempo. Per ogni metrica si provano piu' codici e si dichiara quale
+#    ha risposto; quando nessuno risponde, il modulo elenca i campi ricevuti che
+#    potrebbero corrispondere, cosi' la mappa si corregge guardando i dati invece della
+#    documentazione.
+
+FDIC_BASE = "https://banks.data.fdic.gov/api"
+
+#: Codici del Call Report per ogni metrica di vigilanza, in ordine di preferenza.
+#: Il primo che risponde vince, come per i tag XBRL.
+FDIC_FIELDS: Tuple[Dict[str, Any], ...] = (
+    {
+        "metric": "cet1_ratio",
+        "label": "CET1 ratio (%)",
+        "codes": ("RBCT1CER", "CET1R", "RBC1CER", "CET1RWAJ"),
+    },
+    {
+        "metric": "tier1_ratio",
+        "label": "Tier 1 risk-based ratio (%)",
+        "codes": ("RBC1RWAJ", "RBCT1J", "IDT1RWAJR"),
+    },
+    {
+        "metric": "total_capital_ratio",
+        "label": "Total risk-based ratio (%)",
+        "codes": ("RBCRWAJ", "RBCT2J"),
+    },
+    {
+        "metric": "leverage_ratio",
+        "label": "Leverage ratio (%)",
+        "codes": ("RBC1AAJ", "RBCLEVR"),
+    },
+    {
+        # Prestiti deteriorati su prestiti: la qualita' del credito misurata, non
+        # dedotta dal costo del rischio.
+        "metric": "npl_ratio",
+        "label": "Prestiti deteriorati / prestiti (%)",
+        "codes": ("NCLNLSR", "NPTLA", "NCLNLS"),
+    },
+    {
+        "metric": "supervisory_nim",
+        "label": "Margine di interesse di vigilanza (%)",
+        "codes": ("NIMY",),
+    },
+    {
+        "metric": "supervisory_efficiency",
+        "label": "Efficiency ratio di vigilanza (%)",
+        "codes": ("EEFFR",),
+    },
+)
+
+#: Parole che, in un codice non riconosciuto, segnalano un possibile candidato. Serve
+#: solo alla diagnostica, quando la mappa dei codici non ha trovato nulla.
+#:
+#: Vanno tenute specifiche: un frammento breve come "LEV" pesca qualunque campo che
+#: contenga quelle tre lettere, e un elenco di candidati pieno di falsi positivi non
+#: aiuta a correggere la mappa piu' di un elenco vuoto.
+FDIC_HINTS = ("CET1", "TIER1", "RBC", "NCLN", "NPERF", "NPTL", "LEVR", "LEVERAGE")
+
+
+def _fdic_rows(payload: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    """Righe di una risposta BankFind, che le annida sotto la chiave ``data``."""
+    rows: List[Mapping[str, Any]] = []
+    for entry in payload.get("data") or []:
+        if isinstance(entry, Mapping):
+            row = entry.get("data") if isinstance(entry.get("data"), Mapping) else entry
+            if isinstance(row, Mapping):
+                rows.append(row)
+    return rows
+
+
+def search_fdic_institutions(
+    name: str,
+    quality: Optional[_DataQuality] = None,
+    limit: int = 8,
+) -> List[Dict[str, Any]]:
+    """Cerca un istituto assicurato per nome e restituisce i candidati.
+
+    Serve a trovare il **numero di certificato** una volta sola. Legare ticker e
+    certificato per somiglianza del nome produrrebbe accoppiamenti sbagliati proprio sui
+    gruppi grandi, che controllano piu' banche: meglio mostrare i candidati e far
+    scegliere.
+
+    Returns:
+        Lista di ``{"cert", "name", "city", "state", "assets", "active"}``, dal maggiore.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    url = (
+        f"{FDIC_BASE}/institutions?search=NAME:{urllib.parse.quote(str(name))}"
+        "&fields=CERT,NAME,CITY,STALP,ASSET,ACTIVE"
+        f"&sort_by=ASSET&sort_order=DESC&limit={int(limit)}&format=json"
+    )
+    payload = _get_json(url, quality, source="FDIC BankFind")
+    if not payload:
+        return []
+
+    candidates = [
+        {
+            "cert": row.get("CERT"),
+            "name": row.get("NAME"),
+            "city": row.get("CITY"),
+            "state": row.get("STALP"),
+            "assets": _to_float(row.get("ASSET")),
+            "active": row.get("ACTIVE"),
+        }
+        for row in _fdic_rows(payload)
+    ]
+    if not candidates:
+        quality.miss(f"FDIC: nessun istituto assicurato corrisponde a '{name}'.")
+    return candidates
+
+
+def fetch_fdic_ratios(
+    cert: int,
+    quality: Optional[_DataQuality] = None,
+    *,
+    years: int = 10,
+) -> Dict[str, Dict[int, float]]:
+    """Ratios di vigilanza annuali di un istituto, per numero di certificato.
+
+    Si tengono solo le segnalazioni di **fine esercizio** (dicembre): i trimestri
+    intermedi non sono confrontabili con i bilanci annuali, e mescolarli produrrebbe medie
+    che non corrispondono a nessun anno.
+
+    Returns:
+        ``{metrica: {anno: valore}}`` per le metriche di :data:`FDIC_FIELDS` che hanno
+        risposto. Vuoto se la rete non risponde o il certificato non esiste. Non solleva
+        eccezioni.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    codes = sorted({code for spec in FDIC_FIELDS for code in spec["codes"]})
+    url = (
+        f"{FDIC_BASE}/financials?filters=CERT:{int(cert)}"
+        f"&fields=REPDTE,{','.join(codes)}"
+        f"&sort_by=REPDTE&sort_order=DESC&limit={int(years) * 4}&format=json"
+    )
+    payload = _get_json(url, quality, source="FDIC BankFind")
+    if not payload:
+        return {}
+
+    rows = _fdic_rows(payload)
+    if not rows:
+        quality.miss(f"FDIC: nessuna segnalazione per il certificato {cert}.")
+        return {}
+
+    return parse_fdic_rows(rows, quality)
+
+
+def parse_fdic_rows(
+    rows: Sequence[Mapping[str, Any]],
+    quality: Optional[_DataQuality] = None,
+) -> Dict[str, Dict[int, float]]:
+    """Estrae i ratios annuali dalle righe di una risposta BankFind.
+
+    Separata da :func:`fetch_fdic_ratios` perche' e' la parte che contiene la logica —
+    filtro sul mese di dicembre, scelta del codice fra le alternative — e va verificabile
+    senza rete.
+    """
+    quality = quality if quality is not None else _DataQuality()
+    output: Dict[str, Dict[int, float]] = {}
+    resolved: List[str] = []
+
+    for spec in FDIC_FIELDS:
+        series: Dict[int, float] = {}
+        used: Optional[str] = None
+        for code in spec["codes"]:
+            for row in rows:
+                digits = re.sub(r"\D", "", str(row.get("REPDTE", "")))
+                # REPDTE arriva come YYYYMMDD o YYYY-MM-DD: interessa solo dicembre.
+                if len(digits) < 6 or digits[4:6] != "12":
+                    continue
+                value = _to_float(row.get(code))
+                if value is not None:
+                    series.setdefault(int(digits[:4]), value)
+            if series:
+                used = code
+                break
+        if series:
+            output[spec["metric"]] = series
+            resolved.append(f"{spec['metric']}<-{used}")
+
+    if resolved:
+        quality.note(
+            f"FDIC: {len(resolved)} ratios di vigilanza letti dalle segnalazioni "
+            f"({', '.join(sorted(resolved))}). Sostituiscono i proxy ricostruiti dal "
+            "bilancio consolidato."
+        )
+    else:
+        candidates = sorted({
+            key for row in rows for key in row
+            if key != "REPDTE" and any(hint in key.upper() for hint in FDIC_HINTS)
+        })
+        quality.miss(
+            "FDIC: nessuno dei codici attesi ha risposto. Campi ricevuti che potrebbero "
+            f"corrispondere: {', '.join(candidates) if candidates else 'nessuno'}. "
+            "La mappa si aggiorna in FDIC_FIELDS, dentro datasources.py."
+        )
+    return output
+
+
+def fdic_cert_from_overrides(path: Optional[str], ticker: str) -> Optional[int]:
+    """Numero di certificato FDIC fissato a mano per un ticker.
+
+    Nel file di override, accanto alle voci di bilancio::
+
+        {"JPM": {"fdic_cert": 628, "balance_sheet": {...}}}
+
+    Si scrive una volta sola, ed e' l'unico modo affidabile di legare un ticker
+    all'entita' assicurata, che ha nome e personalita' giuridica diversi dalla holding
+    quotata.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        if path.lower().endswith((".yaml", ".yml")):
+            import yaml
+            data = yaml.safe_load(text)
+        else:
+            data = json.loads(text)
+    except Exception:  # pragma: no cover - file illeggibile, gia' segnalato altrove
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    for key, value in data.items():
+        if str(key).upper() != ticker.upper() or not isinstance(value, Mapping):
+            continue
+        try:
+            cert = value.get("fdic_cert")
+            return int(cert) if cert is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _print_diagnostics(diagnostics: _DataQuality) -> None:
+    for section, entries in diagnostics.as_dict().items():
+        for entry in entries:
+            print(f"  [{section}] {entry}")
+
+
 if __name__ == "__main__":  # pragma: no cover - uso manuale
     import sys
 
-    symbols = [arg for arg in sys.argv[1:] if not arg.startswith("-")] or ["AAPL"]
+    argv = sys.argv[1:]
+
+    # --- Diagnostica FDIC: serve a trovare il certificato e a verificare i codici ---
+    if "--fdic-search" in argv:
+        name = argv[argv.index("--fdic-search") + 1]
+        diagnostics = _DataQuality()
+        print(f"\nFDIC, istituti che corrispondono a '{name}':\n")
+        for candidate in search_fdic_institutions(name, diagnostics, limit=10):
+            assets = candidate.get("assets")
+            print(
+                f"  cert {str(candidate.get('cert')):>7}  "
+                f"{str(candidate.get('name'))[:44]:<44} "
+                f"{str(candidate.get('state') or ''):>3}  "
+                f"{(f'{assets / 1000:,.0f} mld' if assets else 'n/d'):>12}"
+            )
+        print("\n  Il certificato si fissa nel file di override: "
+              '{"TICKER": {"fdic_cert": 628}}')
+        _print_diagnostics(diagnostics)
+        sys.exit(0)
+
+    if "--fdic" in argv:
+        cert = int(argv[argv.index("--fdic") + 1])
+        diagnostics = _DataQuality()
+        print(f"\nFDIC, ratios di vigilanza del certificato {cert}:\n")
+        ratios = fetch_fdic_ratios(cert, diagnostics)
+        for spec in FDIC_FIELDS:
+            series = ratios.get(spec["metric"])
+            if series:
+                anni = sorted(series, reverse=True)
+                recenti = "  ".join(f"{y}: {series[y]:.2f}" for y in anni[:4])
+                print(f"  {spec['label']:<42} {recenti}")
+            else:
+                print(f"  {spec['label']:<42} non disponibile")
+        _print_diagnostics(diagnostics)
+        sys.exit(0)
+
+    # --- Diagnostica SEC ---------------------------------------------------------
+    symbols = [arg for arg in argv if not arg.startswith("-")] or ["AAPL"]
     for symbol in symbols:
         diagnostics = _DataQuality()
         print(f"\nSEC EDGAR: {symbol.upper()}")
@@ -883,6 +1196,4 @@ if __name__ == "__main__":  # pragma: no cover - uso manuale
                         anni = sorted(series, reverse=True)
                         print(f"    {label:32} {len(series):>2} esercizi "
                               f"({anni[-1]}-{anni[0]})")
-        for section, entries in diagnostics.as_dict().items():
-            for entry in entries:
-                print(f"  [{section}] {entry}")
+        _print_diagnostics(diagnostics)

@@ -1221,6 +1221,17 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "balance_sheet": {
                 "label": "Capitale e rischio di credito",
                 "components": {
+                    # I due numeri veri, quando le segnalazioni di vigilanza sono
+                    # disponibili (--fdic). Senza di essi il loro peso si ridistribuisce
+                    # sui proxy e la copertura della categoria lo dichiara: e' il modo
+                    # onesto di dire che il giudizio patrimoniale e' incompleto, invece
+                    # di far sembrare completo un punteggio costruito su approssimazioni.
+                    "cet1_ratio": {"label": "CET1 ratio (%)",
+                                   "source": ("average", "cet1_ratio"),
+                                   "low": 7.0, "high": 13.0, "weight": 0.25},
+                    "npl_ratio": {"label": "Prestiti deteriorati / prestiti (%)",
+                                  "source": ("average", "npl_ratio"),
+                                  "low": 3.0, "high": 0.50, "weight": 0.20},
                     # Proxy della leva: NON e' il CET1, che questa fonte dati non espone.
                     # Le soglie vanno lette su questa differenza. Il CET1 divide per gli
                     # attivi **ponderati per il rischio**, che per una banca commerciale
@@ -1233,15 +1244,15 @@ PROFILES: Dict[str, Dict[str, Any]] = {
                     # un mediocre. La scala corretta e' 5% -> 0, 9% -> 100.
                     "equity_to_assets": {"label": "Patrimonio / attivo (%)",
                                          "source": ("average", "equity_to_assets"),
-                                         "low": 5.0, "high": 9.0, "weight": 0.40},
+                                         "low": 5.0, "high": 9.0, "weight": 0.20},
                     # Sotto 1 significa finanziata dai depositi, non dal mercato: e' la
                     # differenza fra una raccolta stabile e una che evapora in una crisi.
                     "loan_to_deposit": {"label": "Impieghi / depositi",
                                         "source": ("average", "loan_to_deposit"),
-                                        "low": 1.10, "high": 0.70, "weight": 0.30},
+                                        "low": 1.10, "high": 0.70, "weight": 0.20},
                     "cost_of_risk": {"label": "Costo del credito (%)",
                                      "source": ("average", "cost_of_risk"),
-                                     "low": 1.50, "high": 0.20, "weight": 0.30},
+                                     "low": 1.50, "high": 0.20, "weight": 0.15},
                 },
             },
         },
@@ -1566,7 +1577,9 @@ AVERAGE_TARGETS: Dict[str, Tuple[str, ...]] = {
                  "debt_to_equity", "debt_to_ebitda", "interest_coverage", "current_ratio"),
     BANK: ("rotce", "roe", "roa", "net_interest_margin", "efficiency_ratio",
            "fee_income_share", "equity_to_assets", "loan_to_deposit", "cost_of_risk",
-           "tangible_book_per_share"),
+           "tangible_book_per_share",
+           # Presenti solo con le segnalazioni di vigilanza (--fdic).
+           "cet1_ratio", "tier1_ratio", "npl_ratio", "leverage_ratio"),
     INSURANCE: ("roe", "roa", "rotce", "combined_ratio", "investment_yield",
                 "equity_to_assets", "debt_to_equity", "book_value_per_share",
                 "tangible_book_per_share"),
@@ -1606,6 +1619,8 @@ TABLE_ROWS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
         ("Impieghi / depositi", "loan_to_deposit", "ratio"),
         ("Costo del credito %", "cost_of_risk", "pct"),
         ("Patrimonio tang./azione", "tangible_book_per_share", "ratio"),
+        ("CET1 %", "cet1_ratio", "pct"), ("Tier 1 %", "tier1_ratio", "pct"),
+        ("NPL / prestiti %", "npl_ratio", "pct"),
     ),
     REIT: (
         ("Ricavi", "revenue", "big"), ("Utile netto", "net_income", "big"),

@@ -14,13 +14,13 @@ value-quant-app/
 │   ├── valuation.py             "a che prezzo vale la pena?" -> fair value e sconto
 │   ├── backtest.py              "questa regola ha funzionato?" -> equity curve e rischio
 │   ├── sectors.py               6 profili di settore, riconosciuti dal bilancio
-│   ├── datasources.py           SEC EDGAR e override manuali per le voci mancanti
+│   ├── datasources.py           SEC EDGAR, FDIC e override per le voci mancanti
 │   └── visualize.py             tear sheet e grafici in tema scuro
 ├── docs/
 │   ├── COMANDI.md               guida rapida a tutte le opzioni
 │   ├── METODOLOGIA.md           formule, soglie e come si leggono i numeri
 │   └── md2pdf.py                rigenera il PDF della metodologia dal Markdown
-└── tests/                       127 test offline, nessuna rete richiesta
+└── tests/                       135 test offline, nessuna rete richiesta
 ```
 
 ## Documentazione
@@ -320,7 +320,7 @@ Le approssimazioni tipiche:
 
 ## Test
 
-127 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
+135 test offline con bilanci e prezzi sintetici, nessuna rete richiesta:
 
 ```bash
 python tests/test_quality_score.py    # metriche di bilancio e consistenza
@@ -330,7 +330,7 @@ python tests/test_sectors.py          # banche e assicurazioni: metriche e metod
 python tests/test_buffett.py          # criteri di Berkshire, CapEx di mantenimento, filtro
 python tests/test_research.py         # capitalizzazione della R&S (verifiche analitiche)
 python tests/test_reit.py             # profilo REIT: FFO, AFFO, rilevamento
-python tests/test_datasources.py      # SEC EDGAR (XBRL) e override manuali
+python tests/test_datasources.py      # SEC EDGAR (XBRL), FDIC e override manuali
 python tests/test_utility_energy.py   # profili utility regolata ed E&P
 python tests/test_pipeline.py         # integrazione: i grafici sui dizionari reali
 ```

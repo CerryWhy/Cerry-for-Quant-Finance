@@ -1345,6 +1345,7 @@ def calculate_quality_score(
     mode: str = "standard",
     capitalize_rd: bool = False,
     rd_life: int = DEFAULT_RD_LIFE,
+    supervisory: Optional[Mapping[str, Mapping[int, float]]] = None,
 ) -> Dict[str, Any]:
     """Calcola il Quality Score (0-100) di un'azienda.
 
@@ -1372,6 +1373,11 @@ def calculate_quality_score(
             fa, e viene ignorata su banche e assicurazioni.
         rd_life: vita utile in anni della R&S capitalizzata. Default
             :data:`DEFAULT_RD_LIFE` (5, adatta al software); 10 per il farmaceutico.
+        supervisory: metriche di vigilanza ``{nome: {anno: valore}}``, tipicamente
+            l'output di ``datasources.fetch_fdic_ratios``. Sostituiscono i proxy
+            ricostruiti dal bilancio: CET1 e prestiti deteriorati sono componenti del
+            profilo bancario che senza queste serie restano non calcolabili, e la
+            copertura della categoria lo dichiara.
 
     Returns:
         Dizionario con ``quality_score``, ``rating``, ``category_scores`` (punteggio
@@ -1512,6 +1518,31 @@ def calculate_quality_score(
         )
     else:
         metrics = _industrial_metrics(fundamentals, years_desc, quality)
+
+    # --- Metriche di vigilanza ----------------------------------------------
+    # Arrivano da una fonte esterna (FDIC) e non sono ricostruibili dal bilancio: qui si
+    # limitano agli esercizi analizzati, cosi' medie e consistenza restano confrontabili
+    # con tutto il resto.
+    if supervisory:
+        if sector != sectors.BANK:
+            quality.note(
+                "Metriche di vigilanza ignorate: si applicano al profilo bancario."
+            )
+        else:
+            aggiunte = []
+            for name, series in supervisory.items():
+                filtered = {
+                    year: value for year, value in series.items() if year in years_desc
+                }
+                if filtered:
+                    metrics[name] = filtered
+                    aggiunte.append(name)
+            if aggiunte:
+                quality.note(
+                    "Metriche di vigilanza integrate nel profilo bancario: "
+                    f"{', '.join(sorted(aggiunte))}. CET1 e prestiti deteriorati "
+                    "sostituiscono i proxy patrimonio/attivo e costo del credito."
+                )
 
     result["metrics"] = {
         name: {year: _round(series.get(year), 4) for year in years_desc}

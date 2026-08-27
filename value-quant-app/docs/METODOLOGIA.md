@@ -784,14 +784,49 @@ riclassificazione o di un perimetro di consolidamento diverso.
 Ogni riga aggiunta compare in `data_quality` con la sua provenienza. Un dato di origine
 diversa non è un problema; un dato di origine ignota sì.
 
+### FDIC BankFind (`--fdic`): i ratios di vigilanza veri
+
+CET1, Tier 1, leverage ratio e prestiti deteriorati non stanno nei bilanci consolidati:
+vivono nelle segnalazioni di vigilanza. Per le banche americane sono pubblici e gratuiti
+nell'API BankFind della FDIC, e diventano **componenti del profilo bancario**:
+
+| Componente | 0 punti | 100 punti | Peso | Fonte |
+|---|---|---|---|---|
+| CET1 ratio | 7% | 13% | 25% | FDIC |
+| Prestiti deteriorati / prestiti | 3% | 0,5% | 20% | FDIC |
+| Patrimonio / attivo (proxy) | 5% | 9% | 20% | bilancio |
+| Impieghi / depositi | 1,10 | 0,70 | 20% | bilancio |
+| Costo del credito (proxy) | 1,50% | 0,20% | 15% | bilancio |
+
+Senza le segnalazioni le prime due restano non calcolabili, il loro peso si ridistribuisce
+sui proxy e la **copertura della categoria si ferma al 55%**. È il modo onesto di dire che
+il giudizio patrimoniale è incompleto, invece di far sembrare completo un punteggio
+costruito su approssimazioni — ed è lo stesso meccanismo di copertura descritto nel
+modulo 1, che qui trova la sua applicazione più utile.
+
+Due difficoltà, entrambe reali e dichiarate.
+
+**L'entità quotata non è l'entità assicurata.** JPMorgan Chase & Co. è una holding; chi
+deposita alla FDIC è JPMorgan Chase Bank, N.A., con un proprio numero di certificato, e un
+gruppo grande controlla più banche. Nessuna regola automatica lega ticker e certificato in
+modo affidabile: il modello cerca per nome, dichiara quale istituto ha scelto, e invita a
+fissare il certificato una volta per tutte nel file di override (`"fdic_cert": 628`). Qui
+non si indovina in silenzio.
+
+**I nomi dei campi cambiano.** L'API usa i codici del Call Report (`RBCT1CER`, `NCLNLSR`)
+che vengono rinominati nel tempo. Per ogni metrica si provano più codici e si dichiara
+quale ha risposto; quando nessuno risponde, il modulo elenca i campi ricevuti che
+potrebbero corrispondere, così la mappa si corregge guardando i dati invece della
+documentazione. È una scelta deliberata: quei codici non sono verificabili offline, e una
+mappa sbagliata in silenzio sarebbe peggio di un errore dichiarato.
+
 ### Cosa resta fuori
 
-I **ratios di vigilanza veri** (CET1, NPL, LCR) vivono nelle segnalazioni regolamentari.
-Compaiono a volte nei 10-K bancari in XBRL, ma con tag non uniformi: la strada affidabile
-sarebbe l'API FDIC BankFind, che però richiede di mappare il ticker sul certificato FDIC —
-e la holding quotata non è l'entità assicurata. Finché quella strada non è percorsa, il
-profilo bancario continua a usare patrimonio/attivo e costo del credito come proxy
-dichiarati.
+L'**LCR** (liquidity coverage ratio) e le altre metriche di liquidità non sono nelle
+segnalazioni FDIC accessibili da questa API. Per le banche **non** americane non esiste un
+equivalente gratuito e uniforme: l'EBA pubblica dati aggregati, non per singolo istituto in
+serie storica utilizzabile. Per quelle il profilo bancario resta sui proxy dichiarati, e la
+copertura al 55% lo rende visibile a ogni analisi.
 
 ---
 

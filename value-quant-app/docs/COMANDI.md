@@ -27,6 +27,7 @@ Senza ticker analizza `AAPL`. I ticker si separano con uno spazio, maiuscole o m
 | `--sector` | `industrial` \| `bank` \| `insurance` \| `reit` \| `utility` \| `energy` | auto | Forza il profilo invece del riconoscimento automatico |
 | `--sec` | flag | off | Completa le voci mancanti con i depositi XBRL della SEC (solo emittenti USA) |
 | `--overrides` | percorso | — | File JSON/YAML con voci di bilancio inserite a mano |
+| `--fdic` | flag | off | CET1 e prestiti deteriorati veri dalle segnalazioni FDIC (banche USA) |
 | `--capitalize-rd` | flag | off | Tratta la R&S come investimento invece che come costo (Damodaran) |
 | `--rd-life` | intero | `5` | Vita utile della R&S capitalizzata: 5 software, 10 farmaceutico |
 | `--backtest` | — | off | Backtest della strategia (serve un minimo di **3 titoli**) |
@@ -98,7 +99,8 @@ Non sono "tanti dati mancanti": sono poche voci ad alto impatto. Misurato sul mo
 
 | Voce mancante | Cosa fa cadere |
 |---|---|
-| `Net Loan` | 2 componenti su 3 della categoria credito → copertura al 40% |
+| `Net Loan` | impieghi/depositi e costo del credito → copertura della categoria credito dal 55% al 20% |
+| CET1, NPL (mai in bilancio) | la categoria patrimoniale si ferma al 55%: serve `--fdic` |
 | `Total Debt` | 3 regole Buffett su 7 |
 | `Goodwill` | il capitale tangibile diventa una stima |
 | storia di 4-5 anni | consistenza debole, R&S capitalizzata che estrapola |
@@ -126,6 +128,38 @@ Senza questa variabile la SEC risponde `403` e il modello lo dichiara invece di 
 in silenzio. I dati scaricati restano in cache per una settimana (`SEC_CACHE_DIR` per
 cambiare cartella). Copre solo chi deposita presso la SEC: emittenti americani e ADR con
 20-F, non Borsa Italiana.
+
+**`--fdic`** aggiunge i **ratios di vigilanza veri** per le banche americane: CET1,
+Tier 1, leverage ratio e prestiti deteriorati, che non stanno nei bilanci consolidati.
+Sono componenti del profilo bancario: senza di essi la categoria patrimoniale copre il
+55% del peso previsto e lo dichiara, con essi arriva al 100%.
+
+```bash
+python run_analysis.py JPM --fdic
+```
+
+C'è una difficoltà reale: **la holding quotata non è l'entità assicurata**. JPMorgan
+Chase & Co. è la holding; chi deposita alla FDIC è JPMorgan Chase Bank, N.A., con un
+proprio numero di certificato, e i gruppi grandi controllano più banche. Il modello cerca
+per nome e dichiara quale istituto ha scelto, ma la strada affidabile è trovare il
+certificato una volta e fissarlo:
+
+```bash
+python backend/models/datasources.py --fdic-search jpmorgan     # elenca i candidati
+python backend/models/datasources.py --fdic 628                 # verifica i ratios
+```
+
+poi nel file di override, accanto alle voci di bilancio:
+
+```json
+{"JPM": {"fdic_cert": 628}}
+```
+
+**Se i ratios risultano tutti "non disponibile"**, i codici del Call Report sono cambiati:
+il comando `--fdic 628` stampa i campi ricevuti che potrebbero corrispondere, e la mappa
+si aggiorna in `FDIC_FIELDS` dentro `backend/models/datasources.py`. È una scelta
+deliberata: i codici FDIC non sono verificabili offline, e una mappa sbagliata in silenzio
+sarebbe peggio di un errore dichiarato.
 
 **`--overrides`** prende un file JSON con le voci scritte a mano — vedi
 `dati/override-esempio.json`. Le etichette sono quelle di yfinance, si copiano dal

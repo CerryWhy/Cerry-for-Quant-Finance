@@ -170,11 +170,12 @@ def test_nessun_fatto_us_gaap_non_esplode():
 
 
 def test_sec_sblocca_la_categoria_credito():
-    """Una sola voce (``Net Loan``) riporta la copertura dal 40% al 100%.
+    """Una sola voce (``Net Loan``) riporta la copertura della categoria dal 20% al 55%.
 
-    E' la misura del problema: senza gli impieghi netti cadono due componenti su tre —
-    impieghi/depositi e costo del credito — e la categoria resta appesa al solo
-    patrimonio/attivo.
+    E' la misura del problema: senza gli impieghi netti cadono impieghi/depositi e costo
+    del credito, cioe' due delle tre componenti ricostruibili dal bilancio, e il giudizio
+    patrimoniale resta appeso al solo patrimonio/attivo. Il 55% e non il 100% perche' CET1
+    e prestiti deteriorati richiedono le segnalazioni di vigilanza (``--fdic``).
     """
     banca = synthetic.make_bank()
     povera = synthetic.drop_row(banca, "balance_sheet", "Net Loan")
@@ -182,14 +183,14 @@ def test_sec_sblocca_la_categoria_credito():
     prima = calculate_quality_score("BANCA", financials=povera)
     categoria = prima["category_scores"]["balance_sheet"]
     assert categoria["components_used"] == 1
-    assert abs(categoria["coverage"] - 0.4) < 1e-9
+    assert abs(categoria["coverage"] - 0.20) < 1e-9
 
     arricchita = datasources.enrich_financials(povera, "BANCA", sec=False,
                                                sec_facts=BANK_FACTS)
     dopo = calculate_quality_score("BANCA", financials=arricchita)
     categoria = dopo["category_scores"]["balance_sheet"]
     assert categoria["components_used"] == 3
-    assert categoria["coverage"] == 1.0
+    assert abs(categoria["coverage"] - 0.55) < 1e-9
     assert dopo["metrics"]["loan_to_deposit"][2024] is not None
     assert dopo["metrics"]["cost_of_risk"][2024] is not None
     assert format_report(dopo)
@@ -328,6 +329,124 @@ def test_override_ha_precedenza_su_sec():
         )
         colonna = [c for c in arricchita["balance_sheet"].columns if c.year == 2024][0]
         assert arricchita["balance_sheet"].loc["Net Loan", colonna] == 42_000_000_000
+    finally:
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# FDIC: i ratios di vigilanza
+# ---------------------------------------------------------------------------
+
+
+def _fdic_row(period, **codes):
+    """Una riga di segnalazione BankFind, nel formato annidato dell'API."""
+    return {"data": {"REPDTE": period, **codes}}
+
+
+FDIC_PAYLOAD = [
+    _fdic_row("20241231", RBCT1CER=15.2, RBC1RWAJ=16.8, NCLNLSR=0.62, NIMY=2.61),
+    _fdic_row("20240930", RBCT1CER=15.0, RBC1RWAJ=16.5, NCLNLSR=0.60, NIMY=2.58),
+    _fdic_row("20231231", RBCT1CER=14.8, RBC1RWAJ=16.4, NCLNLSR=0.71, NIMY=2.70),
+    _fdic_row("20221231", RBCT1CER=13.9, RBC1RWAJ=15.6, NCLNLSR=0.58, NIMY=2.11),
+]
+
+
+def test_fdic_tiene_solo_le_segnalazioni_di_dicembre():
+    """I trimestri intermedi non sono confrontabili con i bilanci annuali."""
+    rows = [entry["data"] for entry in FDIC_PAYLOAD]
+    ratios = datasources.parse_fdic_rows(rows)
+    assert set(ratios["cet1_ratio"]) == {2024, 2023, 2022}
+    assert ratios["cet1_ratio"][2024] == 15.2, "il terzo trimestre non deve vincere"
+    assert ratios["npl_ratio"][2023] == 0.71
+
+
+def test_fdic_prova_i_codici_in_ordine():
+    """I codici del Call Report cambiano: il primo che risponde vince."""
+    rows = [{"REPDTE": "20241231", "CET1R": 12.4}]      # non il primo della lista
+    quality = _DataQuality()
+    ratios = datasources.parse_fdic_rows(rows, quality)
+    assert ratios["cet1_ratio"] == {2024: 12.4}
+    assert any("cet1_ratio<-CET1R" in nota for nota in quality.notes)
+
+
+def test_fdic_mappa_incompleta_elenca_i_candidati():
+    """Se nessun codice risponde, il modulo dice cosa e' arrivato.
+
+    E' il modo di correggere la mappa guardando i dati invece della documentazione: i
+    codici FDIC non sono verificabili offline, e una mappa sbagliata in silenzio sarebbe
+    peggio di un errore dichiarato.
+    """
+    rows = [{"REPDTE": "20241231", "CET1RATIO_NUOVO": 12.0, "ASSET": 3}]
+    quality = _DataQuality()
+    ratios = datasources.parse_fdic_rows(rows, quality)
+    assert ratios == {}
+    avviso = " ".join(quality.missing)
+    assert "nessuno dei codici attesi" in avviso
+    assert "CET1RATIO_NUOVO" in avviso, "il candidato va segnalato"
+    assert "ASSET" not in avviso, "i campi senza indizi non c'entrano"
+
+
+def test_fdic_date_in_formato_alternativo():
+    rows = [{"REPDTE": "2024-12-31", "RBCT1CER": 11.1}]
+    assert datasources.parse_fdic_rows(rows)["cet1_ratio"] == {2024: 11.1}
+
+
+def test_cet1_e_npl_sostituiscono_i_proxy_nel_punteggio():
+    """Con la vigilanza la categoria patrimoniale e' completa; senza, lo dichiara.
+
+    E' il punto dell'integrazione: patrimonio/attivo e costo del credito restano proxy
+    dichiarati, e la copertura dice quanta parte del giudizio patrimoniale poggia su di
+    essi invece che sui numeri veri.
+    """
+    banca = synthetic.make_bank(equity_share=0.086)
+
+    senza = calculate_quality_score("BANCA", financials=banca)
+    categoria = senza["category_scores"]["balance_sheet"]
+    assert categoria["components_used"] == 3
+    assert abs(categoria["coverage"] - 0.55) < 1e-9
+    assert categoria["components"]["cet1_ratio"]["score"] is None
+
+    anni = sorted(senza["years_analyzed"], reverse=True)
+    vigilanza = {
+        "cet1_ratio": {anno: 15.2 - 0.2 * i for i, anno in enumerate(anni)},
+        "npl_ratio": {anno: 0.62 + 0.05 * i for i, anno in enumerate(anni)},
+    }
+    con = calculate_quality_score("BANCA", financials=banca, supervisory=vigilanza)
+    categoria = con["category_scores"]["balance_sheet"]
+    assert categoria["components_used"] == 5
+    assert categoria["coverage"] == 1.0
+    assert categoria["components"]["cet1_ratio"]["score"] == 100.0
+    assert con["score_coverage"] == 1.0
+    assert any("vigilanza integrate" in nota for nota in con["data_quality"]["notes"])
+    assert "CET1 %" in format_report(con)
+
+
+def test_vigilanza_ignorata_fuori_dal_profilo_bancario():
+    result = calculate_quality_score(
+        "ALFA", financials=synthetic.ALFA,
+        supervisory={"cet1_ratio": {2024: 14.0}},
+    )
+    assert "cet1_ratio" not in result["metrics"]
+    assert any("si applicano al profilo bancario" in nota
+               for nota in result["data_quality"]["notes"])
+
+
+def test_certificato_fdic_dal_file_di_override():
+    path = _scrivi_override({"JPM": {"fdic_cert": 628,
+                                     "balance_sheet": {"Net Loan": {"2024": 1.0}}}})
+    try:
+        assert datasources.fdic_cert_from_overrides(path, "JPM") == 628
+        assert datasources.fdic_cert_from_overrides(path, "BAC") is None
+        assert datasources.fdic_cert_from_overrides(None, "JPM") is None
+        assert datasources.fdic_cert_from_overrides("/non/esiste.json", "JPM") is None
+    finally:
+        os.unlink(path)
+
+
+def test_certificato_malformato_non_esplode():
+    path = _scrivi_override({"JPM": {"fdic_cert": "non-un-numero"}})
+    try:
+        assert datasources.fdic_cert_from_overrides(path, "JPM") is None
     finally:
         os.unlink(path)
 

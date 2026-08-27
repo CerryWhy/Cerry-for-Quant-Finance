@@ -201,10 +201,17 @@ def test_metriche_bancarie_calcolate_correttamente():
     assert abs(metrics["efficiency_ratio"][year] - 56.25) < 0.1
     assert abs(metrics["loan_to_deposit"][year] - 0.433 / 0.733) < 0.01
     assert 0 <= result["quality_score"] <= 100
-    # bilancio bancario completo: tutte le componenti del profilo devono contribuire
-    assert result["score_coverage"] == 1.0
-    for categoria in result["category_scores"].values():
+    # Bilancio bancario completo: redditivita' e consistenza sono al 100%. La categoria
+    # patrimoniale no, e non e' un difetto: CET1 e prestiti deteriorati richiedono le
+    # segnalazioni di vigilanza (--fdic), e la copertura dichiara che il giudizio
+    # patrimoniale poggia sui soli proxy ricostruibili dal bilancio.
+    for nome in ("profitability", "consistency"):
+        categoria = result["category_scores"][nome]
         assert categoria["components_used"] == categoria["components_total"]
+    patrimoniale = result["category_scores"]["balance_sheet"]
+    assert patrimoniale["components_used"] == 3
+    assert abs(patrimoniale["coverage"] - 0.55) < 1e-9
+    assert result["score_coverage"] > 0.80, "il totale resta ampiamente sopra la soglia"
     assert format_report(result)
 
 

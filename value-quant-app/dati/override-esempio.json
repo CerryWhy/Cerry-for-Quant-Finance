@@ -9,6 +9,8 @@
   ],
 
   "JPM": {
+    "_commento": "fdic_cert lega il ticker all'entita' assicurata: la holding quotata non e' la banca. Si trova con: python backend/models/datasources.py --fdic-search jpmorgan",
+    "fdic_cert": 628,
     "balance_sheet": {
       "Net Loan": {
         "2024": 1310000000000,

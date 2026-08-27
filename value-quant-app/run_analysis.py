@@ -17,6 +17,7 @@ Esempi::
     python run_analysis.py EOG DVN                   # profilo E&P: EBITDAX, cassa nel ciclo
     python run_analysis.py JPM --sec                 # voci mancanti da SEC EDGAR
     python run_analysis.py ENI.MI --overrides dati/miei.json   # voci inserite a mano
+    python run_analysis.py JPM --fdic                # CET1 e NPL veri dalle segnalazioni
     python run_analysis.py KO --buffett      # criteri e tasso di sconto di Buffett
     python run_analysis.py GOOGL --capitalize-rd          # R&S come investimento
     python run_analysis.py PFE --capitalize-rd --rd-life 10   # vita utile del farmaceutico
@@ -57,7 +58,12 @@ from models.valuation import (  # noqa: E402
     format_valuation_report,
 )
 
-from models.datasources import enrich_financials  # noqa: E402
+from models.datasources import (  # noqa: E402
+    enrich_financials,
+    fdic_cert_from_overrides,
+    fetch_fdic_ratios,
+    search_fdic_institutions,
+)
 
 try:
     from models import visualize
@@ -68,6 +74,42 @@ except ImportError:  # pragma: no cover - matplotlib assente
 # ---------------------------------------------------------------------------
 # Analisi di un titolo
 # ---------------------------------------------------------------------------
+
+
+def _supervisory_ratios(
+    ticker: str,
+    financials: Dict[str, Any],
+    overrides_path: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Ratios di vigilanza FDIC per una banca americana, se individuabile.
+
+    Il certificato FDIC si prende, in ordine: da ``fdic_cert`` nel file di override, che
+    e' il modo affidabile; altrimenti cercando per nome e prendendo l'istituto piu' grande
+    fra i candidati. La seconda strada e' comoda ma non certa — un gruppo controlla piu'
+    banche — quindi l'istituto scelto viene **dichiarato**, con l'invito a fissare il
+    certificato una volta per tutte.
+    """
+    quality = financials.get("data_quality")
+    cert = fdic_cert_from_overrides(overrides_path, ticker)
+
+    if cert is None:
+        name = financials.get("company_name") or ticker
+        candidates = search_fdic_institutions(name, quality)
+        attivi = [c for c in candidates if c.get("cert") and c.get("active") in (1, "1", True)]
+        scelti = attivi or [c for c in candidates if c.get("cert")]
+        if not scelti:
+            return None
+        cert = int(scelti[0]["cert"])
+        if hasattr(quality, "note"):
+            quality.note(
+                f"FDIC: certificato {cert} scelto cercando '{name}' "
+                f"({scelti[0].get('name')}, {scelti[0].get('state')})"
+                + (f", su {len(scelti)} candidati" if len(scelti) > 1 else "")
+                + ". Per fissarlo, aggiungere \"fdic_cert\" al file di override."
+            )
+
+    ratios = fetch_fdic_ratios(cert, quality)
+    return ratios or None
 
 
 def analyze_ticker(
@@ -82,6 +124,7 @@ def analyze_ticker(
     rd_life: int = DEFAULT_RD_LIFE,
     sec: bool = False,
     overrides_path: Optional[str] = None,
+    fdic: bool = False,
 ) -> Dict[str, Any]:
     """Qualita' + valutazione di un titolo, con un solo download dei bilanci.
 
@@ -97,9 +140,10 @@ def analyze_ticker(
             financials, ticker, sec=sec, overrides_path=overrides_path,
             quality=financials.get("data_quality"),
         )
+    supervisory = _supervisory_ratios(ticker, financials, overrides_path) if fdic else None
     quality = calculate_quality_score(
         ticker, years=years, financials=financials, sector=sector, mode=mode,
-        capitalize_rd=capitalize_rd, rd_life=rd_life,
+        capitalize_rd=capitalize_rd, rd_life=rd_life, supervisory=supervisory,
     )
     market_data = fetch_market_data(ticker)
     valuation = calculate_valuation(
@@ -270,7 +314,7 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
         "show": False, "json": False, "demo": False, "years": 10,
         "growth": None, "wacc": None, "top_n": 5, "sweep": False, "lang": "en", "sector": None, "mode": "standard",
         "capitalize_rd": False, "rd_life": DEFAULT_RD_LIFE,
-        "sec": False, "overrides": None,
+        "sec": False, "overrides": None, "fdic": False,
     }
     index = 0
     while index < len(argv):
@@ -299,6 +343,8 @@ def _parse_args(argv: Sequence[str]) -> Dict[str, Any]:
             options["mode"] = "buffett"; index += 1
         elif argument == "--sec":
             options["sec"] = True; index += 1
+        elif argument == "--fdic":
+            options["fdic"] = True; index += 1
         elif argument == "--overrides" and index + 1 < len(argv):
             options["overrides"] = argv[index + 1]; index += 2
         elif argument == "--capitalize-rd":
@@ -347,6 +393,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sector=options["sector"], mode=options["mode"],
             capitalize_rd=options["capitalize_rd"], rd_life=options["rd_life"],
             sec=options["sec"], overrides_path=options["overrides"],
+            fdic=options["fdic"],
         )
         analyses.append(analysis)
         print(format_report(analysis["quality"]))
